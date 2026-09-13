@@ -393,26 +393,182 @@ static void run_child(char **argv)
     term_enter_raw();
 }
 
-int exec_line(const char *line)
+static char **expand_aliases(char **argv, int *argc)
 {
-    int argc;
-    char **argv = tokenize(line, &argc);
-    if (!argc) { free_argv(argv); return 0; }
-
     int guard = 0;
     while (guard++ < 10) {
         const char *a = alias_lookup(argv[0]);
         if (!a) break;
         size_t need = strlen(a) + 1;
-        for (int i = 1; i < argc; i++) need += strlen(argv[i]) + 2;
+        for (int i = 1; i < *argc; i++) need += strlen(argv[i]) + 2;
         char *nl = xmalloc(need);
         strcpy(nl, a);
-        for (int i = 1; i < argc; i++) { strcat(nl, " "); strcat(nl, argv[i]); }
+        for (int i = 1; i < *argc; i++) { strcat(nl, " "); strcat(nl, argv[i]); }
         free_argv(argv);
-        argv = tokenize(nl, &argc);
+        argv = tokenize(nl, argc);
         free(nl);
-        if (!argc) { free_argv(argv); return 0; }
+        if (*argc == 0) break;
     }
+    return argv;
+}
+
+/* Split a command line on unquoted `|` characters. Whitespace-only
+ * segments are dropped. */
+static int split_pipeline(const char *line, char ***out, int *outn)
+{
+    char **segs = NULL;
+    int n = 0, cap = 0;
+    char seg[LINE_MAX_CP];
+    int si = 0;
+    char q = 0;
+    const char *p = line;
+
+    while (*p) {
+        char ch = *p;
+        if (q == 0 && (ch == '\'' || ch == '"')) { q = ch; seg[si++] = ch; p++; continue; }
+        if (q != 0 && ch == q) { q = 0; seg[si++] = ch; p++; continue; }
+        if (q == 0 && ch == '\\' && p[1]) { seg[si++] = ch; seg[si++] = p[1]; p += 2; continue; }
+        if (q == 0 && ch == '|') {
+            seg[si] = 0;
+            char *t = xstrdup(seg);
+            char *s = t, *e = t + strlen(t);
+            while (*s && isspace((unsigned char)*s)) s++;
+            while (e > s && isspace((unsigned char)e[-1])) e--;
+            *e = 0;
+            if (*s) {
+                if (n >= cap) { cap = cap ? cap * 2 : 4; segs = xrealloc(segs, sizeof(char *) * (size_t)cap); }
+                segs[n++] = xstrdup(s);
+            }
+            free(t);
+            si = 0;
+            p++;
+            continue;
+        }
+        seg[si++] = ch;
+        p++;
+    }
+
+    seg[si] = 0;
+    char *t = xstrdup(seg);
+    char *s = t, *e = t + strlen(t);
+    while (*s && isspace((unsigned char)*s)) s++;
+    while (e > s && isspace((unsigned char)e[-1])) e--;
+    *e = 0;
+    if (*s) {
+        if (n >= cap) { cap = cap ? cap * 2 : 4; segs = xrealloc(segs, sizeof(char *) * (size_t)cap); }
+        segs[n++] = xstrdup(s);
+    }
+    free(t);
+
+    if (!segs) segs = xmalloc(sizeof(char *));
+    *out = segs;
+    *outn = n;
+    return n;
+}
+
+static void pipeline_child(const char *seg, int in_fd, int out_fd)
+{
+    signal(SIGINT, SIG_DFL);
+    signal(SIGQUIT, SIG_DFL);
+    signal(SIGTSTP, SIG_DFL);
+    signal(SIGPIPE, SIG_DFL);
+
+    if (in_fd >= 0) {
+        if (dup2(in_fd, STDIN_FILENO) < 0) _exit(126);
+        close(in_fd);
+    }
+    if (out_fd >= 0) {
+        if (dup2(out_fd, STDOUT_FILENO) < 0) _exit(126);
+        close(out_fd);
+    }
+
+    int argc = 0;
+    char **argv = tokenize(seg, &argc);
+    if (!argc) _exit(0);
+    argv = expand_aliases(argv, &argc);
+    if (!argc) { free_argv(argv); _exit(0); }
+
+    dict_refresh(getenv("PATH"));
+
+    if (run_builtin(argv, argc)) _exit(shell_status);
+
+    if (strchr(argv[0], '/')) {
+        execvp(argv[0], argv);
+        dprintf(2, "%s: %s: %s\n", THESH_NAME, argv[0], strerror(errno));
+        _exit(127);
+    }
+    if (!dict_has(argv[0])) {
+        print_suggestion(argv[0]);
+        _exit(127);
+    }
+    execvp(argv[0], argv);
+    if (errno == ENOENT) print_suggestion(argv[0]);
+    else dprintf(2, "%s: %s: %s\n", THESH_NAME, argv[0], strerror(errno));
+    _exit(127);
+}
+
+static int run_pipeline(char **segs, int n)
+{
+    term_exit_raw();
+    fflush(stdout);
+
+    pid_t *pids = xmalloc(sizeof(pid_t) * (size_t)n);
+    int prev = -1;
+    int fd[2];
+
+    for (int i = 0; i < n; i++) {
+        if (i < n - 1 && pipe(fd) < 0) {
+            perror("pipe");
+            for (int j = 0; j < i; j++) waitpid(pids[j], NULL, 0);
+            shell_status = 1;
+            free(pids);
+            term_enter_raw();
+            return 1;
+        }
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            if (i < n - 1) { close(fd[0]); close(fd[1]); }
+            for (int j = 0; j < i; j++) waitpid(pids[j], NULL, 0);
+            shell_status = 1;
+            free(pids);
+            term_enter_raw();
+            return 1;
+        }
+        if (pid == 0) {
+            pipeline_child(segs[i], prev, (i < n - 1) ? fd[1] : -1);
+            _exit(127);                /* unreachable */
+        }
+        if (prev >= 0) close(prev);
+        if (i < n - 1) { close(fd[1]); prev = fd[0]; }
+        pids[i] = pid;
+    }
+    if (prev >= 0) close(prev);
+
+    int st = 0;
+    for (int i = 0; i < n; i++) {
+        int ws;
+        while (waitpid(pids[i], &ws, 0) < 0) {
+            if (errno != EINTR) break;
+        }
+        if (i == n - 1) {
+            if (WIFEXITED(ws)) st = WEXITSTATUS(ws);
+            else if (WIFSIGNALED(ws)) st = 128 + WTERMSIG(ws);
+        }
+    }
+    free(pids);
+    term_enter_raw();
+    shell_status = st;
+    return st;
+}
+
+static int exec_single(const char *line)
+{
+    int argc;
+    char **argv = tokenize(line, &argc);
+    if (!argc) { free_argv(argv); return 0; }
+    argv = expand_aliases(argv, &argc);
+    if (!argc) { free_argv(argv); return 0; }
 
     dict_refresh(getenv("PATH"));
 
@@ -425,8 +581,8 @@ int exec_line(const char *line)
     if (strchr(argv[0], '/')) {
         if (access(argv[0], X_OK) != 0) {
             dprintf(2, "%s: %s: %s\n", THESH_NAME, argv[0], strerror(errno));
-            shell_status = 127;
             free_argv(argv);
+            shell_status = 127;
             return 127;
         }
         run_child(argv);
@@ -436,14 +592,28 @@ int exec_line(const char *line)
 
     if (!dict_has(argv[0])) {
         print_suggestion(argv[0]);
-        shell_status = 127;
         free_argv(argv);
+        shell_status = 127;
         return 127;
     }
 
     run_child(argv);
     free_argv(argv);
     return shell_status;
+}
+
+int exec_line(const char *line)
+{
+    char **segs;
+    int n;
+    split_pipeline(line, &segs, &n);
+    if (n == 0) { free(segs); return 0; }
+
+    int st = (n == 1) ? exec_single(segs[0]) : run_pipeline(segs, n);
+
+    for (int i = 0; i < n; i++) free(segs[i]);
+    free(segs);
+    return st;
 }
 
 int run_file(const char *path)

@@ -31,6 +31,7 @@ DESTDIR=/ sudo make install   # system-wide install
 - **Aliases** — `alias name=val` with multi-word values; stored in-process, not exported
 - **RC files** — `/etc/theshrc` (system) then `~/.therc` (user) at startup
 - **Non-interactive / pipe support** — reads stdin silently when not a TTY
+- **Pipelines** — `cmd1 | cmd2 | cmd3`, each stage in its own process, exit status from the last command
 
 ## Prompt
 
