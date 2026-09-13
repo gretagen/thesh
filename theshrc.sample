@@ -1,0 +1,9 @@
+# theshrc - Thesh shell configuration (Haliade OS)
+# Loaded at startup for every user via /etc/theshrc.
+
+alias ll='ls -l'
+alias la='ls -la'
+alias h='history'
+alias cls='clear'
+
+echo "Welcome to thesh on Haliade OS."

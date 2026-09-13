@@ -1,0 +1,687 @@
+#include "thesh.h"
+#include <stdbool.h>
+#include <sys/stat.h>
+
+/* ── Key codes ────────────────────────────────────────────────────── */
+enum {
+    K_NONE = 256,           /* raw codepoint returned in `cp` */
+    K_EOF,
+    K_TAB,
+    K_ENTER,
+    K_DEL,                  /* backspace */
+    K_FDEL,                 /* forward delete key */
+    K_UP, K_DOWN, K_LEFT, K_RIGHT,
+    K_HOME, K_END, K_PGUP, K_PGDN,
+    K_WLEFT, K_WRIGHT,      /* word / ctrl / alt movement */
+    K_CTL_A, K_CTL_E, K_CTL_B, K_CTL_F,
+    K_CTL_K, K_CTL_U, K_CTL_W, K_CTL_L, K_CTL_R,
+    K_CTL_C, K_CTL_D,
+};
+
+/* ── Editing buffer (array of codepoints) ─────────────────────────── */
+typedef struct {
+    uint32_t *v;
+    int len, cap, cur;
+} Buf;
+
+static void binit(Buf *b)
+{
+    memset(b, 0, sizeof *b);
+    b->cap = 64;
+    b->v = xmalloc(sizeof(uint32_t) * (size_t)b->cap);
+}
+
+static void bgrow(Buf *b, int need)
+{
+    if (b->len + need <= b->cap) return;
+    while (b->cap < b->len + need) b->cap *= 2;
+    b->v = xrealloc(b->v, sizeof(uint32_t) * (size_t)b->cap);
+}
+
+static void bins(Buf *b, int pos, uint32_t cp)
+{
+    if (b->len >= LINE_MAX_CP) return;
+    bgrow(b, 1);
+    memmove(b->v + pos + 1, b->v + pos, sizeof(uint32_t) * (size_t)(b->len - pos));
+    b->v[pos] = cp;
+    b->len++;
+}
+
+static void bdel(Buf *b, int pos)
+{
+    if (pos < 0 || pos >= b->len) return;
+    memmove(b->v + pos, b->v + pos + 1, sizeof(uint32_t) * (size_t)(b->len - pos - 1));
+    b->len--;
+}
+
+static void bclr(Buf *b)
+{
+    b->len = 0;
+    b->cur = 0;
+}
+
+static void bset_str(Buf *b, const char *str)
+{
+    bclr(b);
+    while (*str) {
+        int n;
+        uint32_t cp;
+        utf8_decode(str, &n, &cp);
+        if (b->len < LINE_MAX_CP) b->v[b->len++] = cp;
+        str += n;
+    }
+    b->cur = b->len;
+}
+
+static int bcells(const Buf *b, int from, int to)
+{
+    int c = 0;
+    for (int i = from; i < to; i++) c += cp_width(b->v[i]);
+    return c;
+}
+
+static void bdump(const Buf *b, int from, int to)
+{
+    char tmp[8];
+    for (int i = from; i < to; i++) {
+        int l = utf8_encode(b->v[i], tmp);
+        outn(tmp, (size_t)l);
+    }
+}
+
+static char *btext(const Buf *b)
+{
+    char *s = xmalloc(sizeof(char) * (size_t)(b->len * 4 + 8));
+    int n = 0;
+    char tmp[8];
+    for (int i = 0; i < b->len; i++) {
+        int l = utf8_encode(b->v[i], tmp);
+        memcpy(s + n, tmp, (size_t)l);
+        n += l;
+    }
+    s[n] = 0;
+    return s;
+}
+
+static int is_word(uint32_t c)
+{
+    return isalnum((int)c) || c == '_';
+}
+
+/* ── Key reading ──────────────────────────────────────────────────── */
+static int read_byte(void)
+{
+    unsigned char c;
+    while (read(STDIN_FILENO, &c, 1) != 1) {
+        if (errno != EINTR) return -1;
+    }
+    return c;
+}
+
+static int parse_seq(const char *s, int n, uint32_t *cp)
+{
+    if (n == 1) { *cp = 27; return K_NONE; }                      /* bare ESC */
+
+    if (n == 2 && s[0] == 27) {                                   /* Alt+X */
+        if (s[1] == 'b') return K_WLEFT;
+        if (s[1] == 'f') return K_WRIGHT;
+        *cp = (unsigned char)s[1];
+        return K_NONE;
+    }
+
+    if (n >= 2 && (s[1] == '[' || s[1] == 'O')) {                 /* CSI */
+        int num = 1, mod = 1;
+        int i = 2;
+        while (i < n && isdigit((unsigned char)s[i])) {
+            num = num * 10 + (s[i] - '0');
+            i++;
+        }
+        if (i < n && s[i] == ';') i++;
+        if (i < n && isdigit((unsigned char)s[i])) {
+            int j = i;
+            while (j < n && isdigit((unsigned char)s[j])) j++;
+            mod = 1;
+            for (int k = i; k < j; k++) mod = mod * 10 + (s[k] - '0');
+            i = j;
+        }
+        char fin = i < n ? s[i] : 0;
+        if (n > 2 && s[1] == 'O') fin = s[n - 1];
+
+        switch (fin) {
+        case 'A': return (mod == 3) ? K_WLEFT : K_UP;
+        case 'B': return (mod == 3) ? K_WRIGHT : K_DOWN;
+        case 'C': return (mod == 3 || mod == 5) ? K_WRIGHT : K_RIGHT;
+        case 'D': return (mod == 3 || mod == 5) ? K_WLEFT : K_LEFT;
+        case 'H': return K_HOME;
+        case 'F': return K_END;
+        case 'M': return K_ENTER;
+        case '~':
+            switch (num) {
+            case 1: case 7: return K_HOME;
+            case 4: case 8: return K_END;
+            case 3: return K_FDEL;
+            case 5: return K_PGUP;
+            case 6: return K_PGDN;
+            }
+            break;
+        }
+    }
+    *cp = (unsigned char)s[n - 1];
+    return K_NONE;
+}
+
+static int read_key(uint32_t *cp)
+{
+    int c = read_byte();
+    if (c < 0) return K_EOF;
+
+    if (c == 27) {
+        char seq[16];
+        int n = 0;
+        seq[n++] = 27;
+        struct pollfd p = { STDIN_FILENO, POLLIN, 0 };
+        while (n < (int)sizeof seq - 1 && poll(&p, 1, 50) > 0) {
+            int b = read_byte();
+            if (b < 0) break;
+            seq[n++] = (char)b;
+        }
+        return parse_seq(seq, n, cp);
+    }
+
+    if (c == EOF) return K_EOF;
+
+    /* Plain (possibly UTF-8) character. */
+    char raw[4];
+    raw[0] = (char)c;
+    int need = 0;
+    if ((c & 0xE0) == 0xC0) need = 1;
+    else if ((c & 0xF0) == 0xE0) need = 2;
+    else if ((c & 0xF8) == 0xF0) need = 3;
+
+    if (need) {
+        for (int i = 1; i <= need; i++) {
+            struct pollfd p = { STDIN_FILENO, POLLIN, 0 };
+            if (poll(&p, 1, 10) <= 0) break;
+            int b = read_byte();
+            if (b < 0) break;
+            raw[i] = (char)b;
+        }
+    }
+
+    int len;
+    uint32_t decoded;
+    if (utf8_decode(raw, &len, &decoded)) {
+        *cp = decoded;
+        return K_NONE;
+    }
+    *cp = (uint32_t)(unsigned char)c;
+    return K_NONE;
+}
+
+/* ── Candidates ───────────────────────────────────────────────────── */
+typedef struct {
+    char **v;
+    int n, cap;
+} Cand;
+
+static void cand_add(Cand *c, const char *s)
+{
+    for (int i = 0; i < c->n; i++)
+        if (strcmp(c->v[i], s) == 0) return;
+    if (c->n >= c->cap) {
+        c->cap = c->cap ? c->cap * 2 : 64;
+        c->v = xrealloc(c->v, sizeof(char *) * (size_t)c->cap);
+    }
+    c->v[c->n++] = xstrdup(s);
+}
+
+static void cand_free(Cand *c)
+{
+    for (int i = 0; i < c->n; i++) free(c->v[i]);
+    free(c->v);
+    c->v = NULL;
+    c->n = c->cap = 0;
+}
+
+#define TOKMAX 512
+
+static void dir_stem_split(const char *tok, char *dir, size_t dirsz, char *stem, size_t stemsz)
+{
+    const char *sl = strrchr(tok, '/');
+    if (sl) {
+        size_t dl = (size_t)(sl - tok);
+        snprintf(dir, dirsz, "%.*s", (int)dl, tok);
+        if (!dir[0]) strcpy(dir, "/");
+        snprintf(stem, stemsz, "%s", sl + 1);
+    } else {
+        strcpy(dir, ".");
+        snprintf(stem, stemsz, "%s", tok);
+    }
+}
+
+static bool is_dir_path(const char *p)
+{
+    struct stat st;
+    return stat(p, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static void collect_candidates(const char *tok, int is_first, Cand *c)
+{
+    if (!tok[0]) return;
+    size_t tl = strlen(tok);
+
+    if (is_first) {
+        for (int i = 0; builtin_names()[i]; i++)
+            if (strncmp(builtin_names()[i], tok, tl) == 0) cand_add(c, builtin_names()[i]);
+        for (int i = 0; i < dict_count(); i++) {
+            const char *d = dict_get(i);
+            if (strncmp(d, tok, tl) == 0) cand_add(c, d);
+        }
+        if (strchr(tok, '/') || tok[0] == '.') {
+            char dir[TOKMAX], stem[TOKMAX];
+            dir_stem_split(tok, dir, sizeof dir, stem, sizeof stem);
+            const char **v; int cap, n;
+            n = file_matches(dir, stem, &v, &cap);
+            for (int i = 0; i < n; i++) cand_add(c, v[i]);
+            for (int i = 0; i < n; i++) free((void *)v[i]);
+            free(v);
+        }
+        return;
+    }
+
+    /* argument position: complete filenames (dir + stem) */
+    char dir[TOKMAX], stem[TOKMAX];
+    dir_stem_split(tok, dir, sizeof dir, stem, sizeof stem);
+    const char **v; int cap, n;
+    n = file_matches(dir, stem, &v, &cap);
+    for (int i = 0; i < n; i++) {
+        cand_add(c, v[i]);
+        free((void *)v[i]);
+    }
+    free(v);
+}
+
+static void token_parts(const char *text, char **pre, char **tok)
+{
+    const char *sp = strrchr(text, ' ');
+    if (sp) {
+        *pre = xstrdup(text);
+        (*pre)[sp - text] = 0;
+        *tok = xstrdup(sp + 1);
+    } else {
+        *pre = xstrdup("");
+        *tok = xstrdup(text);
+    }
+}
+
+/* ── Editor state ─────────────────────────────────────────────────── */
+static Buf e;
+static Buf gh;                       /* ghost suggestion */
+static const char *prompt;
+
+static char *histq = NULL;           /* query used for history browsing */
+static int browse = -1;
+static char *bound = NULL;           /* un-browsed line to restore on Down */
+
+static char rq[512];                 /* reverse-search query */
+static int rqlen = 0;
+static int rmatch = -1;
+static int rsearch_on = 0;
+static char *rbase = NULL;           /* line before search started */
+
+static void hist_reset(void)
+{
+    free(histq); histq = NULL;
+    free(bound); bound = NULL;
+    browse = -1;
+}
+
+/* ── Fish-style ghost suggestion ──────────────────────────────────── */
+static void compute_suggest(void)
+{
+    gh.len = 0;
+    if (e.cur != e.len) return;
+
+    char *text = btext(&e);
+    size_t tl = strlen(text);
+    if (!tl) { free(text); return; }
+
+    /* most recent history entry starting with the whole line */
+    int idx = hist_find(text, H.count - 1, 1);
+    if (idx >= 0) {
+        const char *rest = H.items[idx] + tl;
+        if (rest[0]) bset_str(&gh, rest);
+        free(text);
+        return;
+    }
+
+    /* suggestion for the current token */
+    char *pre, *tok;
+    token_parts(text, &pre, &tok);
+
+    if (tok[0]) {
+        Cand c = {0};
+        collect_candidates(tok, pre[0] ? false : true, &c);
+        if (c.n == 1) {
+            size_t ts = strlen(tok);
+            if (strncmp(c.v[0], tok, ts) == 0) bset_str(&gh, c.v[0] + ts);
+            else bset_str(&gh, c.v[0]);
+        }
+        cand_free(&c);
+    }
+    free(pre);
+    free(tok);
+    free(text);
+}
+
+/* ── Rendering ────────────────────────────────────────────────────── */
+static void ed_draw(void)
+{
+    out("\r");
+    if (prompt) out(prompt);
+    bdump(&e, 0, e.cur);
+    bdump(&e, e.cur, e.len);
+    if (gh.len) {
+        out("\033[7m");
+        bdump(&gh, 0, gh.len);
+        out("\033[27m");
+    }
+    out("\033[K");
+    int back = bcells(&e, e.cur, e.len) + bcells(&gh, 0, gh.len);
+    if (back > 0) outf("\033[%dD", back);
+}
+
+static void rsearch_draw(void)
+{
+    const char *m = rmatch >= 0 ? H.items[rmatch] : "(no match)";
+    out("\n\033[K");
+    outf("(reverse-i-search)`%.*s': %s", rqlen, rq, m);
+}
+
+static void clear_screen(void)
+{
+    out("\033[H\033[2J");
+}
+
+/* ── History navigation ───────────────────────────────────────────── */
+static void hist_up(void)
+{
+    if (H.count == 0) return;
+    if (!histq) {
+        histq = btext(&e);
+        bound = btext(&e);
+    }
+    int start = (browse >= 0 ? browse - 1 : H.count - 1);
+    int idx = hist_find(histq, start, 1);
+    if (idx >= 0) {
+        browse = idx;
+        bset_str(&e, H.items[idx]);
+    }
+}
+
+static void hist_down(void)
+{
+    if (browse < 0 || !histq) return;
+    int idx = hist_find(histq, browse + 1, 0);
+    if (idx >= 0) {
+        browse = idx;
+        bset_str(&e, H.items[idx]);
+    } else {
+        browse = -1;
+        if (bound) bset_str(&e, bound);
+        else bclr(&e);
+    }
+}
+
+/* ── Tab completion (fish-style) ──────────────────────────────────── */
+static void tab_complete(void)
+{
+    char *text = btext(&e);
+    char *pre, *tok;
+    token_parts(text, &pre, &tok);
+
+    bool first = (pre[0] == 0);
+    Cand c = {0};
+    collect_candidates(tok, first, &c);
+
+    if (c.n == 1) {
+        char nl[4096];
+        snprintf(nl, sizeof nl, "%s%s", pre, c.v[0]);
+        size_t l = strlen(nl);
+        if (l > 0 && nl[l - 1] != '/' && is_dir_path(nl)) {
+            nl[l] = '/';
+            nl[l + 1] = 0;
+        }
+        bset_str(&e, nl);
+    } else if (c.n > 1) {
+        size_t tl = strlen(tok);
+        char cp[PATH_MAX];
+        snprintf(cp, sizeof cp, "%s", c.v[0]);
+        for (int i = 1; i < c.n; i++) {
+            size_t j = 0;
+            while (cp[j] && c.v[i][j] && cp[j] == c.v[i][j]) j++;
+            cp[j] = 0;
+        }
+        size_t cpl = strlen(cp);
+        if (cpl > tl) {
+            char nl[4096];
+            snprintf(nl, sizeof nl, "%s%s", pre, cp);
+            bset_str(&e, nl);
+        } else {
+            /* list the matches; the next keystroke redraws the line */
+            out("\r\n");
+            for (int i = 0; i < c.n; i++) outf("%s%s", i ? "  " : "", c.v[i]);
+            out("\r\n");
+        }
+    }
+
+    cand_free(&c);
+    free(pre);
+    free(tok);
+    free(text);
+}
+
+/* ── Non-interactive fallback ─────────────────────────────────────── */
+static char *edit_line_fallback(void)
+{
+    char buf[LINE_MAX_CP];
+    if (!fgets(buf, sizeof buf, stdin)) return NULL;
+    size_t n = strlen(buf);
+    while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = 0;
+    return xstrdup(buf);
+}
+
+/* ── The main line editor ─────────────────────────────────────────── */
+char *edit_line(const char *prompt_txt, int *cancelled)
+{
+    *cancelled = 0;
+    if (!isatty(STDIN_FILENO)) return edit_line_fallback();
+
+    int eof = 0;
+    if (term_enter_raw() < 0) {
+        dprintf(STDERR_FILENO, "%s: cannot set raw mode: %s\n",
+                THESH_NAME, strerror(errno));
+        return NULL;
+    }
+
+    prompt = prompt_txt;
+    binit(&e);
+    binit(&gh);
+    hist_reset();
+    rqlen = 0;
+    rmatch = -1;
+    rsearch_on = 0;
+    free(rbase); rbase = NULL;
+
+    for (;;) {
+        compute_suggest();
+        ed_draw();
+        if (rsearch_on) rsearch_draw();
+
+        uint32_t cp = 0;
+        int key = read_key(&cp);
+        int control = (key == K_NONE && cp < 0x20);
+
+        /* map plain control keys */
+        if (key == K_NONE && control) {
+            switch (cp) {
+            case 0x01: key = K_CTL_A; break;
+            case 0x02: key = K_CTL_B; break;
+            case 0x03: key = K_CTL_C; break;
+            case 0x04: key = K_CTL_D; break;
+            case 0x05: key = K_CTL_E; break;
+            case 0x06: key = K_CTL_F; break;
+            case 0x09: key = K_TAB; break;
+            case 0x0b: key = K_CTL_K; break;
+            case 0x0c: key = K_CTL_L; break;
+            case 0x0a: case 0x0d: key = K_ENTER; break;
+            case 0x12: key = K_CTL_R; break;
+            case 0x15: key = K_CTL_U; break;
+            case 0x17: key = K_CTL_W; break;
+            default:   key = K_NONE; break;
+            }
+        }
+        if (key == K_NONE && cp == 0x7f) key = K_DEL;
+
+        switch (key) {
+        case K_ENTER:
+            if (rsearch_on) {
+                if (rmatch >= 0) bset_str(&e, H.items[rmatch]);
+                rsearch_on = 0;
+                break;                       /* keep edited line */
+            }
+            out("\r\n");
+            goto done;
+
+        case K_CTL_C:
+            if (rsearch_on) { rsearch_on = 0; break; }
+            bclr(&e);
+            out("\r\n");
+            *cancelled = 1;
+            goto done;
+
+        case K_EOF:
+            out("\r\n");
+            eof = 1;
+            goto done;
+
+        case K_CTL_D:
+            if (e.len == 0 && e.cur == 0) {
+                out("\r\n");
+                eof = 1;
+                goto done;                   /* EOF */
+            }
+            bdel(&e, e.cur);                 /* forward delete */
+            break;
+
+        case K_DEL:
+            if (e.cur > 0) { e.cur--; bdel(&e, e.cur); }
+            goto edited;
+
+        case K_FDEL:
+            bdel(&e, e.cur);
+            goto edited;
+
+        case K_LEFT:   if (e.cur > 0) e.cur--; break;
+        case K_RIGHT:  if (e.cur < e.len) e.cur++; break;
+        case K_HOME:   e.cur = 0; break;
+        case K_END:    e.cur = e.len; break;
+
+        case K_WLEFT: {
+            int i = e.cur;
+            while (i > 0 && !is_word(e.v[i - 1])) i--;
+            while (i > 0 && is_word(e.v[i - 1])) i--;
+            e.cur = i;
+            break;
+        }
+        case K_WRIGHT: {
+            int i = e.cur;
+            while (i < e.len && is_word(e.v[i])) i++;
+            while (i < e.len && !is_word(e.v[i])) i++;
+            e.cur = i;
+            break;
+        }
+
+        case K_UP:    hist_up(); break;
+        case K_DOWN:  hist_down(); break;
+
+        case K_CTL_K:
+            while (e.cur < e.len) bdel(&e, e.cur);
+            goto edited;
+        case K_CTL_U:
+            while (e.cur > 0) { e.cur--; bdel(&e, e.cur); }
+            goto edited;
+        case K_CTL_W: {
+            int i = e.cur;
+            while (i > 0 && !is_word(e.v[i - 1])) i--;
+            while (i > 0 && is_word(e.v[i - 1])) i--;
+            while (e.cur > i) { e.cur--; bdel(&e, e.cur); }
+            goto edited;
+        }
+
+        case K_CTL_A: e.cur = 0; break;
+        case K_CTL_E: e.cur = e.len; break;
+        case K_CTL_B: if (e.cur > 0) e.cur--; break;
+        case K_CTL_F: if (e.cur < e.len) e.cur++; break;
+
+        case K_CTL_L:
+            clear_screen();
+            break;
+
+        case K_CTL_R:
+            if (!rsearch_on) {
+                rsearch_on = 1;
+                rqlen = 0;
+                rq[0] = 0;
+                rmatch = -1;
+                free(rbase);
+                rbase = btext(&e);
+            } else {
+                /* earlier match */
+                if (rq[0]) {
+                    int base = rmatch >= 0 ? rmatch - 1 : H.count - 1;
+                    rmatch = hist_find_substr(rq, base, 1);
+                }
+            }
+            break;
+
+        case K_TAB:
+            if (!rsearch_on) tab_complete();
+            goto edited;
+
+        case K_PGUP: e.cur = 0; break;
+        case K_PGDN: e.cur = e.len; break;
+
+        default:
+            if (key == K_NONE && !control) {
+                /* printable char */
+                if (rsearch_on) {
+                    if (rqlen + 4 < (int)sizeof rq) {
+                        char tmp[8];
+                        int l = utf8_encode(cp, tmp);
+                        memcpy(rq + rqlen, tmp, (size_t)l);
+                        rqlen += l;
+                        rq[rqlen] = 0;
+                        rmatch = hist_find_substr(rq, H.count - 1, 1);
+                    }
+                } else {
+                    bins(&e, e.cur, cp);
+                    e.cur++;
+                    goto edited;
+                }
+            }
+            break;
+        }
+        continue;
+    edited:
+        hist_reset();
+        continue;
+    }
+
+done:
+    hist_reset();
+    if (eof) return NULL;
+    if (*cancelled) return xstrdup("");
+    char *r = btext(&e);
+    return r;
+}
