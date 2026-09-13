@@ -25,7 +25,7 @@
 #include <pwd.h>
 
 #define THESH_NAME    "thesh"
-#define THESH_VERSION "0.2.0"
+#define THESH_VERSION "0.2.2"
 #define HIST_NAME     ".thesh_history"
 #define HIST_MAX      500
 #define ALIAS_MAX     128

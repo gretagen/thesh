@@ -46,8 +46,14 @@ int main(int argc, char **argv)
     hist_load();
     atexit(thesh_on_exit);
 
+    /* The C library spawns subprocesses as `sh -c -- command_string`, a
+     * convention bash/dash both honour: a `--` immediately after -c is the
+     * end-of-options marker, not the command. Swallow it so the command is
+     * the argument that follows (argc==2 falls through to run_file). */
     if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
-        int st = exec_line(argv[2]);
+        int ai = 2;
+        if (argc >= 4 && strcmp(argv[2], "--") == 0) ai = 3;
+        int st = exec_line(argv[ai]);
         hist_save();
         return st;
     }

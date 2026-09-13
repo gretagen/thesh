@@ -306,7 +306,7 @@ static void token_parts(const char *text, char **pre, char **tok)
     const char *sp = strrchr(text, ' ');
     if (sp) {
         *pre = xstrdup(text);
-        (*pre)[sp - text] = 0;
+        (*pre)[sp - text + 1] = 0;      /* keep the trailing space in pre */
         *tok = xstrdup(sp + 1);
     } else {
         *pre = xstrdup("");
