@@ -382,9 +382,9 @@ static void ed_draw(void)
     bdump(&e, 0, e.cur);
     bdump(&e, e.cur, e.len);
     if (gh.len) {
-        out("\033[7m");
+        out("\033[2m");
         bdump(&gh, 0, gh.len);
-        out("\033[27m");
+        out("\033[22m");
     }
     out("\033[K");
     int back = bcells(&e, e.cur, e.len) + bcells(&gh, 0, gh.len);

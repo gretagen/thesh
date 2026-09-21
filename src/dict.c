@@ -18,7 +18,11 @@ static void add_cmd(const char *n)
 void dict_refresh(const char *pathstr)
 {
     if (path_cache && pathstr && strcmp(path_cache, pathstr) == 0) return;
+    dict_force_refresh(pathstr);
+}
 
+void dict_force_refresh(const char *pathstr)
+{
     free(path_cache);
     path_cache = pathstr ? xstrdup(pathstr) : NULL;
 

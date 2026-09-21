@@ -58,6 +58,14 @@ void hist_add(const char *line)
     H.dirty = 1;
 }
 
+void hist_clear(void)
+{
+    for (int i = 0; i < H.count; i++) free(H.items[i]);
+    H.count = 0;
+    H.dirty = 1;
+    hist_save();
+}
+
 void hist_save(void)
 {
     if (!H.dirty) return;

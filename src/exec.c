@@ -50,7 +50,7 @@ void print_aliases(void)
 
 static const char *builtin_list[] = {
     "cd", "pwd", "echo", "export", "unset", "alias", "unalias",
-    "history", "source", "exit", "type", "set", NULL
+    "history", "source", "exit", "type", "set", "clearhistory", "hash", NULL
 };
 
 const char *const *builtin_names(void) { return builtin_list; }
@@ -330,6 +330,12 @@ static int run_builtin(char **args, int argc)
         return 1;
     }
 
+    if (!strcmp(c, "clearhistory")) {
+        hist_clear();
+        shell_status = 0;
+        return 1;
+    }
+
     if (!strcmp(c, "source") || !strcmp(c, ".")) {
         if (argc > 1) run_file(args[1]);
         shell_status = 0;
@@ -361,13 +367,155 @@ static int run_builtin(char **args, int argc)
         return 1;
     }
 
+    if (!strcmp(c, "hash")) {
+        int force = 0;
+        for (int i = 1; i < argc; i++) {
+            if (!strcmp(args[i], "-r") || !strcmp(args[i], "--rehash")) force = 1;
+        }
+        if (force) dict_force_refresh(getenv("PATH"));
+        shell_status = 0;
+        return 1;
+    }
+
     return 0;
 }
 
 /* ── Execution ────────────────────────────────────────────────────── */
-static void run_child(char **argv)
+typedef struct {
+    int    fd;      /* target descriptor */
+    int    mode;    /* 0 = read, 1 = truncate write, 2 = append write */
+    int    dupfd;   /* >= 0: dup2(dupfd, fd); else open(path, ...) */
+    int    shared;  /* 1: dup the previous redir's file description */
+    char  *path;
+} Redir;
+
+static int parse_redir_tok(const char *tok, int *kind, int *mode, int *fd,
+                           int *dupfd, const char **rest)
 {
-    term_exit_raw();
+    *kind = 0; *mode = 0; *fd = 1; *dupfd = -1; *rest = NULL;
+    size_t L = strlen(tok);
+
+    if (isdigit((unsigned char)tok[0]) && L >= 2 && tok[1] == '>') {
+        *fd = tok[0] - '0';
+        if (L >= 4 && tok[2] == '&' && isdigit((unsigned char)tok[3])) {
+            *kind = 5; *dupfd = tok[3] - '0'; return 1;         /* n>&m */
+        }
+        if (L >= 3 && tok[2] == '>') { *kind = 3; *mode = 2; *rest = tok + 3; return 1; }
+        *kind = 3; *mode = 1; *rest = tok + 2; return 1;
+    }
+    if (L >= 2 && tok[0] == '&' && tok[1] == '>') {
+        *kind = 4; *fd = 1;                  /* &> / &>> : both fd 1,2 */
+        if (L >= 3 && tok[2] == '>') { *mode = 2; *rest = tok + 3; }
+        else { *mode = 1; *rest = tok + 2; }
+        return 1;
+    }
+    if (L >= 1 && tok[0] == '>') {
+        *kind = 2; *fd = 1;                  /* > / >> */
+        if (L >= 2 && tok[1] == '>') { *mode = 2; *rest = tok + 2; }
+        else { *mode = 1; *rest = tok + 1; }
+        return 1;
+    }
+    if (L >= 1 && tok[0] == '<') {
+        *kind = 1; *fd = 0; *mode = 0; *rest = tok + 1;
+        return 1;
+    }
+    return 0;
+}
+
+/* Filter redirection tokens out of argv, collect them as Redir actions.
+ * *out gets a view of the non-redir args (NULL-terminated); the strings
+ * are owned by argv. Returns number of redirs, or -1 on syntax error. */
+static int collect_redirs(char **args, int argc, Redir *redr, int capr,
+                          char ***out, int *outargc)
+{
+    char **na = NULL;
+    int n = 0, cap = 0, nr = 0;
+
+    for (int i = 0; i < argc; i++) {
+        int kind, mode, fd, dupfd;
+        const char *rest;
+        if (!parse_redir_tok(args[i], &kind, &mode, &fd, &dupfd, &rest)) {
+            if (n >= cap) {
+                cap = cap ? cap * 2 : 8;
+                na = xrealloc(na, sizeof(char *) * (size_t)cap);
+            }
+            na[n++] = args[i];
+            continue;
+        }
+        if (kind == 5) {                       /* 2>&1 / 1>&2 */
+            if (nr < capr) {
+                redr[nr].fd = fd; redr[nr].mode = 0;
+                redr[nr].dupfd = dupfd; redr[nr].path = NULL;
+                nr++;
+            }
+            continue;
+        }
+        const char *path = (rest && *rest) ? rest : (i + 1 < argc ? args[++i] : NULL);
+        if (!path) {
+            dprintf(2, "%s: parse error: redirection with no file\n", THESH_NAME);
+            if (na) free(na);
+            return -1;
+        }
+        {
+            int nred = (kind == 4) ? 2 : 1;
+            for (int k = 0; k < nred && nr < capr; k++) {
+                int tfd = (kind == 1) ? 0
+                       : (kind == 3) ? fd
+                       : (kind == 2) ? fd
+                       : (k ? 2 : 1);
+                redr[nr].fd = tfd;
+                redr[nr].mode = mode;
+                redr[nr].dupfd = -1;
+                redr[nr].shared = (kind == 4) ? k : 0;
+                redr[nr].path = xstrdup(path);
+                nr++;
+            }
+        }
+    }
+    if (!na) na = xmalloc(sizeof(char *));
+    na[n] = NULL;
+    *out = na;
+    *outargc = n;
+    return nr;
+}
+
+static void free_redirs(Redir *redr, int n)
+{
+    for (int i = 0; i < n; i++) free(redr[i].path);
+}
+
+static int apply_redirs(const Redir *redr, int n)
+{
+    for (int i = 0; i < n; i++) {
+        int nfd;
+        if (redr[i].dupfd >= 0) {
+            nfd = dup(redr[i].dupfd);
+        } else if (redr[i].shared && i > 0) {
+            nfd = dup(redr[i - 1].fd);
+        } else {
+            int fl = (redr[i].mode == 0)
+                   ? O_RDONLY
+                   : (redr[i].mode == 2) ? O_WRONLY | O_APPEND | O_CREAT
+                                         : O_WRONLY | O_TRUNC | O_CREAT;
+            nfd = open(redr[i].path, fl, 0644);
+            if (nfd < 0) {
+                dprintf(2, "%s: %s: %s\n", THESH_NAME, redr[i].path,
+                        strerror(errno));
+                return -1;
+            }
+        }
+        if (nfd < 0 || dup2(nfd, redr[i].fd) < 0) {
+            dprintf(2, "%s: dup/dup2: %s\n", THESH_NAME, strerror(errno));
+            if (nfd >= 0) close(nfd);
+            return -1;
+        }
+        if (redr[i].fd != nfd) close(nfd);
+    }
+    return 0;
+}
+
+static void run_child(char **argv, const Redir *redr, int nredir)
+{
     fflush(stdout);
     pid_t pid = fork();
     if (pid < 0) {
@@ -380,6 +528,7 @@ static void run_child(char **argv)
         signal(SIGQUIT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
         signal(SIGPIPE, SIG_DFL);
+        if (nredir > 0 && apply_redirs(redr, nredir) < 0) _exit(1);
         execvp(argv[0], argv);
         dprintf(2, "%s: %s: %s\n", THESH_NAME, argv[0], strerror(errno));
         _exit(127);
@@ -390,7 +539,6 @@ static void run_child(char **argv)
     }
     if (WIFEXITED(st)) shell_status = WEXITSTATUS(st);
     else if (WIFSIGNALED(st)) shell_status = 128 + WTERMSIG(st);
-    term_enter_raw();
 }
 
 static char **expand_aliases(char **argv, int *argc)
@@ -488,28 +636,42 @@ static void pipeline_child(const char *seg, int in_fd, int out_fd)
     argv = expand_aliases(argv, &argc);
     if (!argc) { free_argv(argv); _exit(0); }
 
+    Redir redr[16];
+    char **clean;
+    int nredir = collect_redirs(argv, argc, redr, 16, &clean, &argc);
+    if (nredir < 0) { free(clean); free_argv(argv); _exit(2); }
+
     dict_refresh(getenv("PATH"));
 
-    if (run_builtin(argv, argc)) _exit(shell_status);
+    if (nredir > 0 && apply_redirs(redr, nredir) < 0) {
+        free_redirs(redr, nredir);
+        free_argv(argv);
+        _exit(1);
+    }
+    free_redirs(redr, nredir);
 
-    if (strchr(argv[0], '/')) {
-        execvp(argv[0], argv);
-        dprintf(2, "%s: %s: %s\n", THESH_NAME, argv[0], strerror(errno));
+    if (run_builtin(clean, argc)) _exit(shell_status);
+
+    if (strchr(clean[0], '/')) {
+        execvp(clean[0], clean);
+        dprintf(2, "%s: %s: %s\n", THESH_NAME, clean[0], strerror(errno));
         _exit(127);
     }
-    if (!dict_has(argv[0])) {
-        print_suggestion(argv[0]);
-        _exit(127);
+    if (!dict_has(clean[0])) {
+        dict_force_refresh(getenv("PATH"));
+        if (!dict_has(clean[0])) {
+            print_suggestion(clean[0]);
+            _exit(127);
+        }
     }
-    execvp(argv[0], argv);
-    if (errno == ENOENT) print_suggestion(argv[0]);
-    else dprintf(2, "%s: %s: %s\n", THESH_NAME, argv[0], strerror(errno));
+    execvp(clean[0], clean);
+    if (errno == ENOENT) print_suggestion(clean[0]);
+    else dprintf(2, "%s: %s: %s\n", THESH_NAME, clean[0], strerror(errno));
     _exit(127);
 }
 
 static int run_pipeline(char **segs, int n)
 {
-    term_exit_raw();
     fflush(stdout);
 
     pid_t *pids = xmalloc(sizeof(pid_t) * (size_t)n);
@@ -522,7 +684,6 @@ static int run_pipeline(char **segs, int n)
             for (int j = 0; j < i; j++) waitpid(pids[j], NULL, 0);
             shell_status = 1;
             free(pids);
-            term_enter_raw();
             return 1;
         }
         pid_t pid = fork();
@@ -532,7 +693,6 @@ static int run_pipeline(char **segs, int n)
             for (int j = 0; j < i; j++) waitpid(pids[j], NULL, 0);
             shell_status = 1;
             free(pids);
-            term_enter_raw();
             return 1;
         }
         if (pid == 0) {
@@ -557,62 +717,219 @@ static int run_pipeline(char **segs, int n)
         }
     }
     free(pids);
-    term_enter_raw();
     shell_status = st;
     return st;
 }
 
-static int exec_single(const char *line)
+static int exec_single(const char *seg)
 {
     int argc;
-    char **argv = tokenize(line, &argc);
+    char **argv = tokenize(seg, &argc);
     if (!argc) { free_argv(argv); return 0; }
     argv = expand_aliases(argv, &argc);
     if (!argc) { free_argv(argv); return 0; }
 
+    Redir redr[16];
+    char **clean;
+    int nredir = collect_redirs(argv, argc, redr, 16, &clean, &argc);
+    if (nredir < 0) {
+        if (clean) free(clean);
+        free_argv(argv);
+        shell_status = 2;
+        return 2;
+    }
+
     dict_refresh(getenv("PATH"));
 
-    if (run_builtin(argv, argc)) {
-        int st = shell_status;
-        free_argv(argv);
-        return st;
-    }
-
-    if (strchr(argv[0], '/')) {
-        if (access(argv[0], X_OK) != 0) {
-            dprintf(2, "%s: %s: %s\n", THESH_NAME, argv[0], strerror(errno));
-            free_argv(argv);
-            shell_status = 127;
-            return 127;
+    int st;
+    if (clean[0] && is_builtin(clean[0])) {
+        if (nredir == 0) {
+            run_builtin(clean, argc);
+            st = shell_status;
+        } else {
+            int saved[3] = { -1, -1, -1 };
+            saved[0] = dup(0);
+            saved[1] = dup(1);
+            saved[2] = dup(2);
+            if (apply_redirs(redr, nredir) < 0) {
+                for (int i = 0; i < 3; i++) {
+                    if (saved[i] >= 0) { dup2(saved[i], i); close(saved[i]); }
+                }
+                free_redirs(redr, nredir);
+                st = 1;
+                shell_status = 1;
+                goto out;
+            }
+            run_builtin(clean, argc);
+            st = shell_status;
+            for (int i = 0; i < 3; i++) {
+                if (saved[i] >= 0) { dup2(saved[i], i); close(saved[i]); }
+            }
+            free_redirs(redr, nredir);
         }
-        run_child(argv);
-        free_argv(argv);
-        return shell_status;
+    } else if (strchr(clean[0], '/')) {
+        if (access(clean[0], X_OK) != 0) {
+            dprintf(2, "%s: %s: %s\n", THESH_NAME, clean[0], strerror(errno));
+            st = 127;
+            shell_status = 127;
+        } else {
+            run_child(clean, redr, nredir);
+            st = shell_status;
+        }
+        free_redirs(redr, nredir);
+    } else if (!dict_has(clean[0])) {
+        dict_force_refresh(getenv("PATH"));
+        if (!dict_has(clean[0])) {
+            print_suggestion(clean[0]);
+            st = 127;
+            shell_status = 127;
+        } else {
+            run_child(clean, redr, nredir);
+            st = shell_status;
+        }
+        free_redirs(redr, nredir);
+    } else {
+        run_child(clean, redr, nredir);
+        st = shell_status;
+        free_redirs(redr, nredir);
     }
 
-    if (!dict_has(argv[0])) {
-        print_suggestion(argv[0]);
-        free_argv(argv);
-        shell_status = 127;
-        return 127;
-    }
-
-    run_child(argv);
+out:
+    free(clean);
     free_argv(argv);
-    return shell_status;
+    return st;
+}
+
+/* Split a command line on `;`, `&&`, `||` and background `&` at top
+ * level.  ops[i] is the operator preceding units[i]: 0 (first), 1 (`&&`),
+ * 2 (`||`), 3 (`;`), 4 (`&` async). */
+static int split_ops(const char *line, char ***out, int **outops)
+{
+    char **units = NULL;
+    int *ops = NULL;
+    int n = 0, cap = 0;
+    int op = 0;
+    char seg[LINE_MAX_CP];
+    int si = 0;
+    char q = 0;
+    const char *p = line;
+
+#define PUSH() do {                                                          \
+        int s = 0, e = si;                                                   \
+        while (s < e && isspace((unsigned char)seg[s])) s++;                 \
+        while (e > s && isspace((unsigned char)seg[e - 1])) e--;             \
+        if (e > s) {                                                          \
+            seg[e] = 0;                                                       \
+            if (n >= cap) { cap = cap ? cap * 2 : 4;                          \
+                units = xrealloc(units, sizeof(char *) * (size_t)cap);        \
+                ops   = xrealloc(ops,   sizeof(int)    * (size_t)cap);        \
+            }                                                                 \
+            units[n] = xstrdup(seg);                                          \
+            ops[n]   = op;                                                    \
+            n++;                                                              \
+        }                                                                     \
+        si = 0;                                                               \
+    } while (0)
+
+    while (*p) {
+        char ch = *p;
+        if (q == 0 && (ch == '\'' || ch == '"')) { q = ch; seg[si++] = ch; p++; continue; }
+        if (q != 0 && ch == q) { q = 0; seg[si++] = ch; p++; continue; }
+        if (q == 0 && ch == '\\' && p[1]) { seg[si++] = ch; seg[si++] = p[1]; p += 2; continue; }
+        if (q == 0) {
+            if (p[0] == '&' && p[1] == '&') { PUSH(); op = 1; p += 2; continue; }
+            if (p[0] == '|' && p[1] == '|') { PUSH(); op = 2; p += 2; continue; }
+            if (p[0] == ';')                { PUSH(); op = 3; p += 1; continue; }
+            if (p[0] == '&' && p[1] == '>') { seg[si++] = '&'; seg[si++] = '>'; p += 2; continue; }
+            if (p[0] == '>' && p[1] == '&') { seg[si++] = '>'; seg[si++] = '&'; p += 2; continue; }
+            if (p[0] == '&')                { PUSH(); op = 4; p += 1; continue; }
+        }
+        seg[si++] = ch;
+        p++;
+    }
+    PUSH();
+#undef PUSH
+
+    if (!units) units = xmalloc(sizeof(char *));
+    *out = units;
+    *outops = ops;
+    return n;
+}
+
+/* One command unit (`|`-pipeline).  Foreground brackets the terminal in
+ * cooked mode; background children inherit whatever state is current. */
+static int exec_unit(const char *unit, int bg)
+{
+    char **segs;
+    int n;
+    split_pipeline(unit, &segs, &n);
+    if (n == 0) { free(segs); return 0; }
+
+    if (!bg) term_exit_raw();
+    fflush(stdout);
+
+    int st = (n == 1) ? exec_single(segs[0]) : run_pipeline(segs, n);
+
+    if (!bg) term_enter_raw();
+    for (int i = 0; i < n; i++) free(segs[i]);
+    free(segs);
+    return st;
+}
+
+static int reap_bg(void)
+{
+    int st = 0;
+    int ws;
+    while (waitpid(-1, &ws, WNOHANG) > 0) {
+        if (WIFSIGNALED(ws)) st = 128 + WTERMSIG(ws);
+    }
+    return st;
 }
 
 int exec_line(const char *line)
 {
-    char **segs;
-    int n;
-    split_pipeline(line, &segs, &n);
-    if (n == 0) { free(segs); return 0; }
+    char **units;
+    int *ops;
+    int n = split_ops(line, &units, &ops);
+    if (n == 0) { free(ops); free(units); return 0; }
 
-    int st = (n == 1) ? exec_single(segs[0]) : run_pipeline(segs, n);
+    static int bgjobs = 0;
+    int st = 0;
 
-    for (int i = 0; i < n; i++) free(segs[i]);
-    free(segs);
+    for (int i = 0; i < n; i++) {
+        if (ops[i] == 1 && st != 0) continue;     /* && short-circuit */
+        if (ops[i] == 2 && st == 0) continue;     /* || short-circuit */
+
+        if (ops[i] == 4) {                        /* background */
+            term_exit_raw();
+            fflush(stdout);
+            pid_t pid = fork();
+            if (pid < 0) {
+                perror("fork");
+                st = 1;
+            } else if (pid == 0) {
+                signal(SIGINT, SIG_DFL);
+                signal(SIGQUIT, SIG_DFL);
+                signal(SIGTSTP, SIG_DFL);
+                signal(SIGPIPE, SIG_DFL);
+                int dn = open("/dev/null", O_RDONLY);
+                if (dn >= 0) { dup2(dn, STDIN_FILENO); close(dn); }
+                _exit(exec_unit(units[i], 1));
+            } else {
+                outf("[%d] %d\n", ++bgjobs, pid);
+            }
+            term_enter_raw();
+            continue;
+        }
+
+        st = exec_unit(units[i], 0);
+    }
+
+    reap_bg();
+
+    for (int i = 0; i < n; i++) free(units[i]);
+    free(units);
+    free(ops);
     return st;
 }
 

@@ -25,7 +25,7 @@
 #include <pwd.h>
 
 #define THESH_NAME    "thesh"
-#define THESH_VERSION "0.2.2"
+#define THESH_VERSION "0.2.3"
 #define HIST_NAME     ".thesh_history"
 #define HIST_MAX      500
 #define ALIAS_MAX     128
@@ -68,11 +68,13 @@ void    hist_setup(void);
 void    hist_load(void);
 void    hist_add(const char *line);
 void    hist_save(void);
+void    hist_clear(void);
 int     hist_find(const char *needle, int start, int backward);
 int     hist_find_substr(const char *sub, int start, int backward);
 
 /* ---- dict.c ---- */
 void        dict_refresh(const char *pathstr);
+void        dict_force_refresh(const char *pathstr);
 int         dict_count(void);
 const char *dict_get(int i);
 int         dict_has(const char *name);
