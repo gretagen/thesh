@@ -181,6 +181,8 @@ static void free_argv(char **args)
 }
 
 /* ── Builtins ─────────────────────────────────────────────────────── */
+static int case_fold_command(char *cmd);
+
 static int path_of_command(const char *cmd, char *out, size_t outsz)
 {
     const char *path = getenv("PATH");
@@ -349,6 +351,7 @@ static int run_builtin(char **args, int argc)
 
     if (!strcmp(c, "type")) {
         for (int i = 1; i < argc; i++) {
+            case_fold_command(args[i]);
             const char *a = alias_lookup(args[i]);
             if (a) outf("%s is aliased to `%s'\n", args[i], a);
             else if (is_builtin(args[i])) outf("%s is a shell builtin\n", args[i]);
@@ -560,6 +563,34 @@ static char **expand_aliases(char **argv, int *argc)
     return argv;
 }
 
+/* Lowercase ARGV[0] in place if the lowercase form resolves to a known
+ * command (alias, builtin, or $PATH binary). Only folds DOWN — a command
+ * whose real name contains capitals is left exactly as typed. Explicit
+ * paths containing '/' are never folded. Returns 1 if folded. */
+static int case_fold_command(char *cmd)
+{
+    if (!cmd || !cmd[0]) return 0;
+    if (strchr(cmd, '/')) return 0;
+
+    int has_upper = 0;
+    for (const char *p = cmd; *p; p++) {
+        if (isupper((unsigned char)*p)) { has_upper = 1; break; }
+    }
+    if (!has_upper) return 0;
+
+    char lw[LINE_MAX_CP];
+    size_t il = 0;
+    for (; cmd[il]; il++) lw[il] = (char)tolower((unsigned char)cmd[il]);
+    lw[il] = 0;
+    if (strcmp(lw, cmd) == 0) return 0;
+
+    if (is_builtin(lw) || alias_lookup(lw) || dict_has(lw)) {
+        strcpy(cmd, lw);
+        return 1;
+    }
+    return 0;
+}
+
 /* Split a command line on unquoted `|` characters. Whitespace-only
  * segments are dropped. */
 static int split_pipeline(const char *line, char ***out, int *outn)
@@ -633,8 +664,10 @@ static void pipeline_child(const char *seg, int in_fd, int out_fd)
     int argc = 0;
     char **argv = tokenize(seg, &argc);
     if (!argc) _exit(0);
+    case_fold_command(argv[0]);
     argv = expand_aliases(argv, &argc);
     if (!argc) { free_argv(argv); _exit(0); }
+    case_fold_command(argv[0]);
 
     Redir redr[16];
     char **clean;
@@ -659,6 +692,7 @@ static void pipeline_child(const char *seg, int in_fd, int out_fd)
     }
     if (!dict_has(clean[0])) {
         dict_force_refresh(getenv("PATH"));
+        case_fold_command(clean[0]);
         if (!dict_has(clean[0])) {
             print_suggestion(clean[0]);
             _exit(127);
@@ -726,8 +760,10 @@ static int exec_single(const char *seg)
     int argc;
     char **argv = tokenize(seg, &argc);
     if (!argc) { free_argv(argv); return 0; }
+    case_fold_command(argv[0]);
     argv = expand_aliases(argv, &argc);
     if (!argc) { free_argv(argv); return 0; }
+    case_fold_command(argv[0]);
 
     Redir redr[16];
     char **clean;
@@ -779,6 +815,7 @@ static int exec_single(const char *seg)
         free_redirs(redr, nredir);
     } else if (!dict_has(clean[0])) {
         dict_force_refresh(getenv("PATH"));
+        case_fold_command(clean[0]);
         if (!dict_has(clean[0])) {
             print_suggestion(clean[0]);
             st = 127;

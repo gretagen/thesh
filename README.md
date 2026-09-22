@@ -27,6 +27,7 @@ DESTDIR=/ sudo make install   # system-wide install
 - **Prefix history search** — type a prefix, press ↑/↓ to walk only matching past commands
 - **Reverse-i-search** — Ctrl-R for substring history search
 - **Levenshtein typo detection** — misspelled commands trigger a "Did you mean …?" suggestion
+- **Case-insensitive commands** — `LS`, `PACMAN -S`, `ECHO` all work; only the command name is folded, arguments stay as typed
 - **Full tokenizer** — single/double quotes, backslash escapes, `$VAR`, `${VAR}`, `$?`, `~` expansion
 - **Aliases** — `alias name=val` with multi-word values; stored in-process, not exported
 - **RC files** — `/etc/theshrc` (system) then `~/.therc` (user) at startup
