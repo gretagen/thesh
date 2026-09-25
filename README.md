@@ -125,12 +125,13 @@ Config lives in rc files, loaded in order:
 Config lines also work **live** when typed into the shell (they're consumed
 before command execution). A copy with examples ships as `theshrc.sample`.
 
-Syntax — the key may be separated from the value by `=` or `:` and the value may
-be quoted with `'…'` or `"…"` or bare:
+Syntax — the key is separated from the value with `=` (the canonical form);
+the older `:` form is still accepted so existing configs keep working. The value
+may be quoted with `'…'` or `"…"` or bare:
 
 ```sh
 cursorstyle = '$'
-seperatorstyle : '|'
+seperatorstyle = '|'
 looks = "$RIGHTWALL $SPACER $USER $SPACER $SEPERATOR $SPACER $HOSTNAME $SPACER $LEFTWALL $SPACER $PATH $SPACER $CURSOR"
 ```
 

@@ -213,9 +213,10 @@ static int config_is_key(const char *key)
     return 0;
 }
 
-/* Parse one line as a config directive. Accepts `key = value` and
- * `key : value`, with single/double-quoted or bare values. Returns 1 if
- * the line was a config directive (known key), else 0. */
+/* Parse one line as a config directive. `=` is the canonical separator
+ * (`key = value`); the legacy `:` form is still accepted so old rc files
+ * and presets keep loading. Values may be single/double-quoted or bare.
+ * Returns 1 if the line was a config directive (known key), else 0. */
 int config_apply_line(const char *line)
 {
     const char *p = line;

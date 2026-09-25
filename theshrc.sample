@@ -16,12 +16,12 @@ alias cls='clear'
 
 layout = "$RIGHTWALL $SPACER $USER $SPACER $SEPERATOR $SPACER $HOSTNAME $SPACER $LEFTWALL $SPACER $PATH $SPACER $CURSOR"
 
-rightwallstyle : '['
-leftwallstyle : ']'
-seperatorstyle : '|'
+rightwallstyle = '['
+leftwallstyle = ']'
+seperatorstyle = '|'
 
 # any symbol can be a cursor; '' for none
-cursorstyle : '$'
+cursorstyle = '$'
 
 # colors
 # presets: black red green yellow blue purple cyan white grey pink,
@@ -29,42 +29,42 @@ cursorstyle : '$'
 #   default : no color change, strictly the terminal default foreground
 #   none    : no color code at all
 
-rightwall-color : 'default'
-leftwall-color : 'default'
-seperator-color : 'default'
-hostname-color : 'default'
-user-color : 'default'
-path-color : 'default'
-cursor-color : 'default'
-guesser-color : 'grey'
+rightwall-color = 'default'
+leftwall-color = 'default'
+seperator-color = 'default'
+hostname-color = 'default'
+user-color = 'default'
+path-color = 'default'
+cursor-color = 'default'
+guesser-color = 'grey'
 
 # textcolor : general text color, used for literal text and for any
 #             element without its own color (default: none)
-# textcolor : 'default'
+# textcolor = 'default'
 
 # opacity (percentages, quoted or bare: '100%' or 65)
 # below 100% the color is blended toward black and emitted as a 256-color
 # code; only has an effect on elements that have a color set
 
-rightwall-opacity : '100%'
-leftwall-opacity : '100%'
-seperator-opacity : '100%'
-hostname-opacity : '100%'
-user-opacity : '100%'
-path-opacity : '100%'
-cursor-opacity : '100%'
-guesser-opacity : '65%'
+rightwall-opacity = '100%'
+leftwall-opacity = '100%'
+seperator-opacity = '100%'
+hostname-opacity = '100%'
+user-opacity = '100%'
+path-opacity = '100%'
+cursor-opacity = '100%'
+guesser-opacity = '65%'
 
 # typing
 # hybrid    : allows lowercase and uppercase (default)
 # lowercase : lowercase only
 
-typing : 'hybrid'
+typing = 'hybrid'
 
 # guesser
 # guesses the command you're typing from history
 
-guesser : 'yes'
+guesser = 'yes'
 
 # corrector
 # active   : immediately corrects the command
@@ -72,7 +72,7 @@ guesser : 'yes'
 # consent  : asks before correcting your command
 # inactive : disables correction
 
-corrector : 'passive'
+corrector = 'passive'
 
 # shortcuts (key bindings)
 # left side: modifiers CTRL/ALT/SUPER (WIN/WINDOWS/META also work) joined
@@ -103,12 +103,12 @@ CTRL + Z = "exec('zeta')  ask(action?)"
 # ALT + F5   = exec('reload')
 
 # history
-#   history      : 'yes' records new commands and saves them on exit;
+#   history      = 'yes' records new commands and saves them on exit;
 #                  'no' stops recording (the saved file is left alone)
-#   historylimit : keep only the last N commands (any value; default 500)
+#   historylimit = keep only the last N commands (any value; default 500)
 
-history : 'yes'
-historylimit : '30'
+history = 'yes'
+historylimit = '30'
 
 # presets
 #   presets          : list presets and apply one (the shell asks whether
