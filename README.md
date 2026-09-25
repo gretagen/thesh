@@ -4,7 +4,7 @@ A lightweight, standalone POSIX shell for Haliade OS, written in C11/C23. No bas
 dependency — works with any system providing a C compiler and POSIX libc. Tiny
 single binary; no external libraries.
 
-Current version: **0.3.0**
+Current version: **0.4.0**
 
 ## Building
 
@@ -105,7 +105,7 @@ When `looks` isn't set, `$PS1` is expanded. Supported escapes:
 | `\u`   | user                             | `\w`   | cwd (`~` collapsed) |
 | `\h`   | hostname (short)                 | `\W`   | basename of cwd |
 | `\H`   | hostname (long)                  | `\$`   | `#` if root, else `$` |
-| `\s`   | shell name (`thesh`)             | `\v`   | version (`0.3.0`) |
+| `\s`   | shell name (`thesh`)             | `\v`   | version (`0.4.0`) |
 | `\t`   | time `HH:MM:SS`                  | `\A`   | time `HH:MM`    |
 | `\@`   | time `HH:MM AM/PM`               | `\d`   | date `Day Mon DD` |
 | `\n`   | newline                          | `\e`   | escape          |
