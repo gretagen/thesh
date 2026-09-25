@@ -30,7 +30,7 @@ Config Cfg;
 
 static const char default_looks[] =
     "$RIGHTWALL $SPACER $USER $SPACER $SEPERATOR $SPACER "
-    "$HOSTNAME $SPACER $LEFTWALL $SPACER $PATH $SPACER $CURSOR";
+    "$HOSTNAME $SPACER $LEFTWALL $SPACER $PATH $SPACER $CURSOR $SPACER";
 
 const char *config_default_looks(void) { return default_looks; }
 
