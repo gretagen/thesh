@@ -387,6 +387,80 @@ void color_sgr(const char *sgr, int opacity, char *buf, size_t sz)
     snprintf(buf, sz, "38;5;%d", cube_index(r, g, b));
 }
 
+/* ── Preset export ────────────────────────────────────────────────── */
+/* Write a value as `'...'` (or "..." when it contains a single quote),
+ * i.e. in a form config_apply_line re-parses verbatim. */
+static void fqval(FILE *f, const char *v)
+{
+    if (!strchr(v, '\'')) fprintf(f, "'%s'", v);
+    else                  fprintf(f, "\"%s\"", v);
+}
+
+static const char *color_name_of(const char *sgr)
+{
+    if (!sgr) return NULL;
+    for (int i = 0; i < NCOLORS; i++)
+        if (colors[i].sgr[0] && !strcmp(colors[i].sgr, sgr))
+            return colors[i].name;
+    return NULL;
+}
+
+/* Serialize the effective config as a theshrc-style preset. Aliases and
+ * key bindings are appended by the callers (exec.c / bind.c). */
+void config_dump_current(FILE *f)
+{
+    struct { const char *key; char **slot; } cols[] = {
+        { "rightwall-color", &Cfg.col_rightwall },
+        { "leftwall-color",  &Cfg.col_leftwall },
+        { "seperator-color", &Cfg.col_sep },
+        { "hostname-color",  &Cfg.col_host },
+        { "user-color",      &Cfg.col_user },
+        { "path-color",      &Cfg.col_path },
+        { "cursor-color",    &Cfg.col_cursor },
+        { "guesser-color",   &Cfg.col_guess },
+        { "textcolor",       &Cfg.textcolor },
+    };
+    struct { const char *key; int v; } ops[] = {
+        { "rightwall-opacity", Cfg.op_rightwall },
+        { "leftwall-opacity",  Cfg.op_leftwall },
+        { "seperator-opacity", Cfg.op_sep },
+        { "hostname-opacity",  Cfg.op_host },
+        { "user-opacity",      Cfg.op_user },
+        { "path-opacity",      Cfg.op_path },
+        { "cursor-opacity",    Cfg.op_cursor },
+        { "guesser-opacity",   Cfg.op_guess },
+    };
+
+    fprintf(f, "# thesh preset\n");
+    if (Cfg.looks && Cfg.looks[0]) { fputs("layout = ", f); fqval(f, Cfg.looks); fputc('\n', f); }
+    if (Cfg.rightwall && Cfg.rightwall[0]) { fputs("rightwallstyle = ", f); fqval(f, Cfg.rightwall); fputc('\n', f); }
+    if (Cfg.leftwall && Cfg.leftwall[0])   { fputs("leftwallstyle = ", f); fqval(f, Cfg.leftwall); fputc('\n', f); }
+    if (Cfg.sep && Cfg.sep[0])             { fputs("seperatorstyle = ", f); fqval(f, Cfg.sep); fputc('\n', f); }
+    if (Cfg.cursor && Cfg.cursor[0])       { fputs("cursorstyle = ", f); fqval(f, Cfg.cursor); fputc('\n', f); }
+
+    for (size_t i = 0; i < sizeof cols / sizeof cols[0]; i++) {
+        char *sgr = *cols[i].slot;
+        if (!sgr || !sgr[0]) continue;
+        const char *nm = color_name_of(sgr);
+        if (!nm) continue;
+        fputs(cols[i].key, f);
+        fputs(" = ", f);
+        fqval(f, nm);
+        fputc('\n', f);
+    }
+    for (size_t i = 0; i < sizeof ops / sizeof ops[0]; i++) {
+        if (ops[i].v < 0) continue;
+        fprintf(f, "%s = '%d%%'\n", ops[i].key, ops[i].v);
+    }
+
+    fprintf(f, "typing = '%s'\n", Cfg.hybrid ? "hybrid" : "lowercase");
+    fprintf(f, "guesser = '%s'\n", Cfg.guesser ? "yes" : "no");
+    static const char *cor[] = { "passive", "active", "consent", "inactive" };
+    fprintf(f, "corrector = '%s'\n",
+            (Cfg.corrector >= 0 && Cfg.corrector < 4) ? cor[Cfg.corrector] : "passive");
+    fprintf(f, "autoreload = '%s'\n", Cfg.autoreload ? "yes" : "no");
+}
+
 /* ── $PS1 expansion (bash-style subset) ───────────────────────────── */
 enum { PS1_T_HMS = 0, PS1_T_HM, PS1_T_12H, PS1_T_DATE };
 

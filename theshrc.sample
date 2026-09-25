@@ -94,4 +94,12 @@ ALT + M = "exec('micro') ask(path?)"
 # prompts for an action, then runs zeta <action>
 CTRL + Z = "exec('zeta')  ask(action?)"
 
+# presets
+#   presets          : list presets and apply one (the shell asks whether
+#                      to make it the default for system/user/both, then
+#                      overwrites the rc file(s) and re-sources them)
+#   savepreset       : save the current config as a preset
+# presets are stored in ~/.config/thesh/presets/ (user) and
+# /etc/thesh/presets (system)
+
 echo "Welcome to thesh on Haliade OS."

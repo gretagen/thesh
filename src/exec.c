@@ -48,9 +48,22 @@ void print_aliases(void)
         outf("%s=%s\n", aliases[i].name, aliases[i].value);
 }
 
+/* Serialize aliases as config lines (used by savepreset). */
+void dump_aliases(FILE *f)
+{
+    for (int i = 0; i < nalias; i++) {
+        fprintf(f, "alias %s=", aliases[i].name);
+        if (!strchr(aliases[i].value, '\''))
+            fprintf(f, "'%s'\n", aliases[i].value);
+        else
+            fprintf(f, "\"%s\"\n", aliases[i].value);
+    }
+}
+
 static const char *builtin_list[] = {
     "cd", "pwd", "echo", "export", "unset", "alias", "unalias",
-    "history", "source", "exit", "type", "set", "clearhistory", "hash", NULL
+    "history", "source", "exit", "type", "set", "clearhistory", "hash",
+    "presets", "savepreset", NULL
 };
 
 const char *const *builtin_names(void) { return builtin_list; }
@@ -379,6 +392,9 @@ static int run_builtin(char **args, int argc)
         shell_status = 0;
         return 1;
     }
+
+    if (!strcmp(c, "presets"))    { shell_status = cmd_presets(argc, args);    return 1; }
+    if (!strcmp(c, "savepreset")) { shell_status = cmd_savepreset(argc, args); return 1; }
 
     return 0;
 }

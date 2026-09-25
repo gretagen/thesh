@@ -206,3 +206,71 @@ const Bind *bind_lookup(int mods, int key)
             return &binds[i];
     return NULL;
 }
+
+/* ── Preset export ────────────────────────────────────────────────── */
+static const char *key_token_name(int key)
+{
+    switch (key) {
+    case K_ENTER:     return "ENTER";
+    case K_TAB:       return "TAB";
+    case ' ':         return "SPACE";
+    case K_DEL:       return "BACKSPACE";
+    case K_FDEL:      return "DELETE";
+    case K_UP:        return "UP";
+    case K_DOWN:      return "DOWN";
+    case K_LEFT:      return "LEFT";
+    case K_RIGHT:     return "RIGHT";
+    case K_HOME:      return "HOME";
+    case K_END:       return "END";
+    case K_PGUP:      return "PAGEUP";
+    case K_PGDN:      return "PAGEDOWN";
+    case 27:          return "ESC";
+    default:          return NULL;
+    }
+}
+
+static void dump_bind_action(FILE *f, const Bind *b)
+{
+    switch (b->kind) {
+    case BIND_CLOSE: fputs("close\n", f); break;
+    case BIND_COPY:  fputs("copy\n", f); break;
+    case BIND_PASTE: fputs("paste\n", f); break;
+    case BIND_EXEC:
+        fputs("exec(", f);
+        if (!strchr(b->cmd, '\'')) fprintf(f, "'%s'", b->cmd);
+        else                       fprintf(f, "\"%s\"", b->cmd);
+        fputc(')', f);
+        if (b->ask[0]) {
+            fputs(" ask(", f);
+            if (!strchr(b->ask, '\'')) fprintf(f, "'%s'", b->ask);
+            else                       fprintf(f, "\"%s\"", b->ask);
+            fputc(')', f);
+        }
+        fputc('\n', f);
+        break;
+    }
+}
+
+/* Serialize every binding back into config syntax (used by savepreset). */
+void bind_dump(FILE *f)
+{
+    for (int i = 0; i < nbinds; i++) {
+        const Bind *b = &binds[i];
+        if (b->mods & MOD_CTRL) fputs("CTRL", f);
+        if (b->mods & MOD_ALT) {
+            if (b->mods & MOD_CTRL) fputs(" + ALT", f);
+            else                    fputs("ALT", f);
+        }
+        fputs(" + ", f);
+        const char *nm = key_token_name(b->key);
+        if (nm) {
+            fputs(nm, f);
+        } else if (b->key >= 0 && b->key < 256 && isgraph((unsigned char)b->key)) {
+            fputc((unsigned char)toupper(b->key), f);
+        } else {
+            fputc('?', f);
+        }
+        fputs(" = ", f);
+        dump_bind_action(f, b);
+    }
+}

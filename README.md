@@ -268,6 +268,60 @@ Config `echo` lines are suppressed during an auto-reload (only warnings on
 Running `source ~/.theshrc` by hand still prints normally. Set `autoreload = no`
 in an rc file to disable watching.
 
+## Presets
+
+A preset is a named, plain theshrc file. Presets live in two places:
+
+| Location | Directory                        |
+|----------|----------------------------------|
+| user     | `~/.config/thesh/presets/`       |
+| system   | `/etc/thesh/presets`             |
+
+### `presets` — list and apply
+
+Running `presets` interactively prints a numbered list (user presets first;
+a user preset shadows a system one of the same name) and lets you pick by
+number or name:
+
+```
+select preset :
+
+1 : kawaii
+2 : default
+```
+
+After a pick it asks which rc file(s) to make the shell default for:
+
+```
+make this shell default for...?
+1 : system
+2 : user
+3 : both
+```
+
+The chosen preset is copied over `/etc/theshrc` and/or `~/.theshrc` and the
+existing shell re-sources it immediately — the new prompt, aliases and key
+bindings are active on the very next prompt. `presets NAME` applies a preset
+directly without the menu. Non-interactively (e.g. `thesh -c 'presets'`) the
+command just lists the names; with an argument it applies to the user rc.
+
+### `savepreset` — export your current config
+
+Serializes the effective config — options, colors/opacity, aliases and key
+bindings — as a preset file:
+
+```
+save preset at? :
+1 : system /etc/thesh/presets
+2 : user ~/.config/thesh/presets
+3 : custom
+```
+
+Options 1 and 2 ask for a preset name; option 3 takes a full path (`path : `).
+`savepreset NAME` supplies the name up front and skips the name prompt.
+Preset files round-trip: a saved preset can be applied weeks later and restores
+the exact prompt, aliases and bindings.
+
 ## Builtins
 
 | Command            | Description                          |
@@ -285,6 +339,8 @@ in an rc file to disable watching.
 | `clearhistory`     | Clear and save the history           |
 | `hash`             | Manage the command lookup cache      |
 | `source`           | Execute lines from a file            |
+| `presets`          | List/apply preset configs (see above) |
+| `savepreset`       | Save the current config as a preset  |
 | `exit [n]`         | Exit with status `n`                 |
 
 ## Run modes

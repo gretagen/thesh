@@ -122,6 +122,7 @@ typedef struct {
 
 int          bind_parse_line(const char *line);
 const Bind  *bind_lookup(int mods, int key);
+void         bind_dump(FILE *f);
 
 /* ---- config.c ---- */
 typedef struct {
@@ -162,6 +163,7 @@ char    *render_looks_str(const char *tpl, const char *user,
 char    *render_ps1(const char *ps1, const char *user,
                     const char *host, const char *dir);
 void     color_sgr(const char *sgr, int opacity, char *buf, size_t sz);
+void     config_dump_current(FILE *f);
 
 /* ---- editor.c ---- */
 char   *edit_line(const char *prompt, int *cancelled);
@@ -175,7 +177,12 @@ const char *alias_lookup(const char *name);
 void    alias_set(const char *name, const char *value);
 void    alias_unset(const char *name);
 void    print_aliases(void);
+void    dump_aliases(FILE *f);
 const char *const *builtin_names(void);
 char   *build_prompt(void);
+
+/* ---- presets.c ---- */
+int     cmd_presets(int argc, char **argv);
+int     cmd_savepreset(int argc, char **argv);
 
 #endif
