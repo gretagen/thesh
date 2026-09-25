@@ -110,6 +110,17 @@ CTRL + Z = "exec('zeta')  ask(action?)"
 history = 'yes'
 historylimit = '30'
 
+# animations — how typed characters appear on screen:
+#   animation = matrix     random letters scramble into the one you typed
+#   animation = newcomer   the letter rides in from the right
+#   animation = placement  pieces snap in from every side, like legos
+#   animation = spinner    a / - \ | spinner before the letter lands
+#   animation = none       (default) instant, plain typing
+# The character is committed to the line the moment you press the key, so
+# typing fast just cuts the animation short — nothing is ever lost.
+
+animation = matrix
+
 # presets
 #   presets          : list presets and apply one (the shell asks whether
 #                      to make it the default for system/user/both, then

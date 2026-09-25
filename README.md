@@ -215,6 +215,24 @@ guesser-opacity = '65%'
 | `autoreload`| `yes`     | `yes`/`no` — re-source rc files automatically when they change on disk |
 | `history`  | `yes`      | `yes`/`no` — record new commands and save them on exit |
 | `historylimit` | `500`  | any number — max commands kept in history (oldest are trimmed; `0` disables) |
+| `animation` | `none`   | `none`/`matrix`/`newcomer`/`placement`/`spinner` — how typed characters appear (see below) |
+
+Typed-character animations are purely cosmetic and **never block input**: the
+letter is committed to the line the instant the key is pressed, so typing fast
+simply cuts the animation short — nothing is lost and the command runs even
+while a frame is still on screen.
+
+| Style        | Effect                                                            |
+|--------------|-------------------------------------------------------------------|
+| `none`       | the character appears instantly (default)                         |
+| `matrix`     | random letters scramble in place, then settle on what you typed   |
+| `newcomer`   | the letter rides into position from the right                     |
+| `placement`  | pieces snap in from every side, like legos                       |
+| `spinner`    | a `/ - \ |` spinner twirls before the letter lands                |
+
+```sh
+animation = spinner
+```
 
 ### Key bindings
 

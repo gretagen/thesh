@@ -60,6 +60,7 @@ void config_init(void)
     Cfg.autoreload   = 1;      /* re-source rc files on edit */
     Cfg.history_limit   = HIST_MAX;
     Cfg.history_enabled = 1;
+    Cfg.animation       = ANIM_NONE;
     Cfg.col_rightwall = NULL;
     Cfg.col_leftwall  = NULL;
     Cfg.col_sep       = NULL;
@@ -189,6 +190,15 @@ int config_set_option(const char *key, const char *val)
         hist_set_limit((int)n);
         return 1;
     }
+    if (!strcmp(key, "animation")) {
+        if (!val || !strcasecmp(val, "none"))     Cfg.animation = ANIM_NONE;
+        else if (!strcasecmp(val, "matrix"))      Cfg.animation = ANIM_MATRIX;
+        else if (!strcasecmp(val, "newcomer"))    Cfg.animation = ANIM_NEWCOMER;
+        else if (!strcasecmp(val, "placement"))   Cfg.animation = ANIM_PLACEMENT;
+        else if (!strcasecmp(val, "spinner"))     Cfg.animation = ANIM_SPINNER;
+        else Cfg.animation = ANIM_NONE;
+        return 1;
+    }
     return 0;
 }
 
@@ -202,7 +212,7 @@ static const char *known_keys[] = {
     "hostname-opacity", "user-opacity", "path-opacity", "cursor-opacity",
     "guesser-opacity",
     "typing", "guesser", "corrector", "autoreload",
-    "history", "historylimit",
+    "history", "historylimit", "animation",
 };
 
 static int config_is_key(const char *key)
@@ -483,6 +493,9 @@ void config_dump_current(FILE *f)
     fprintf(f, "autoreload = '%s'\n", Cfg.autoreload ? "yes" : "no");
     fprintf(f, "history = '%s'\n", Cfg.history_enabled ? "yes" : "no");
     fprintf(f, "historylimit = '%d'\n", Cfg.history_limit);
+    static const char *anims[] = { "none", "matrix", "newcomer", "placement", "spinner" };
+    fprintf(f, "animation = '%s'\n",
+            Cfg.animation < 0 || Cfg.animation > 4 ? "none" : anims[Cfg.animation]);
 }
 
 /* ── $PS1 expansion (bash-style subset) ───────────────────────────── */

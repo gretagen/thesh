@@ -538,6 +538,125 @@ static void clear_screen(void)
     out("\033[H\033[2J");
 }
 
+/* ── Typed-character animations ──────────────────────────────────────
+ * Pure cosmetics: the character is already committed to the buffer when
+ * ed_animate() runs, so an in-flight animation can never block input or
+ * lose a keystroke. Every frame polls stdin; the moment a new key queues
+ * up the animation bails and the main loop takes over immediately.     */
+#define ANIM_FRAME_MS 40
+#define ANIM_FRAMES   10
+
+static uint32_t rand_anim_glyph(void)
+{
+    static const char pool[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#?";
+    return (uint32_t)pool[rand() % (int)(sizeof pool - 1)];
+}
+
+/* Pace one frame. Returns 1 if a keystroke is already waiting. */
+static int anim_pump(void)
+{
+    struct pollfd pfd = { .fd = STDIN_FILENO, .events = POLLIN };
+    return poll(&pfd, 1, ANIM_FRAME_MS) > 0;
+}
+
+/* Render the line with the character at buffer index `idx` shown as
+ * `glyph` (0 = blank) shifted `offs` cells from its natural position:
+ *   0   in place (the final state)
+ *   >0  riding in from the right
+ *   <0  overlaid just left of its cell (pieces "from every side")      */
+static void anim_draw(int idx, int offs, uint32_t glyph)
+{
+    int w = cp_width(e.v[idx]);                 /* natural char width */
+    char tmp[8] = "";
+    int gl = glyph ? utf8_encode(glyph, tmp) : 0;
+    int gw = gl ? cp_width(glyph) : 0;
+    int printed;                                /* cells after the prefix */
+
+    out("\r");
+    if (prompt) out(prompt);
+    bdump(&e, 0, idx);
+
+    if (offs < 0) {
+        for (int i = 0; i < w; i++) out(" ");       /* blank the natural cell */
+        outf("\033[%dD", w - offs);                 /* jump left over it       */
+        if (gl) outn(tmp, (size_t)gl);              /* overlay the glyph       */
+        outf("\033[%dC", w - offs - gw);            /* resume at the suffix    */
+        printed = w;
+    } else if (offs == 0) {
+        if (gl) outn(tmp, (size_t)gl);
+        else for (int i = 0; i < w; i++) out(" ");
+        for (int i = gw; i < w; i++) out(" ");
+        printed = gw > w ? gw : w;
+    } else {
+        for (int i = 0; i < offs; i++) out(" ");
+        if (gl) outn(tmp, (size_t)gl);
+        for (int i = offs + gw; i < w; i++) out(" ");
+        printed = offs + gw > w ? offs + gw : w;
+    }
+
+    bdump(&e, idx + 1, e.len);
+    if (gh.len) {
+        if (Cfg.col_guess) {
+            char sgb[24] = "";
+            color_sgr(Cfg.col_guess, Cfg.op_guess, sgb, sizeof sgb);
+            char wrap[32] = "";
+            if (sgb[0]) snprintf(wrap, sizeof wrap, "\033[%sm", sgb);
+            out(wrap);
+            bdump(&gh, 0, gh.len);
+            out("\033[0m");
+        } else {
+            out("\033[2m");
+            bdump(&gh, 0, gh.len);
+            out("\033[22m");
+        }
+    }
+    out("\033[K");
+    int back = printed + bcells(&e, idx + 1, e.len) + bcells(&gh, 0, gh.len) - w;
+    if (back > 0) outf("\033[%dD", back);
+}
+
+static void ed_animate(int idx)
+{
+    if (Cfg.animation == ANIM_NONE) return;
+    if (!term_raw_active())       return;
+
+    uint32_t real = e.v[idx];
+    compute_suggest();            /* fresh ghost behind the frames */
+
+    switch (Cfg.animation) {
+    case ANIM_MATRIX:             /* scrambled letters → the real char */
+        for (int f = 0; f < ANIM_FRAMES; f++) {
+            anim_draw(idx, 0, rand_anim_glyph());
+            if (anim_pump()) return;
+        }
+        break;
+    case ANIM_SPINNER: {          /* / - \ | spinner → the real char */
+        static const uint32_t fr[] = { '/', '-', '\\', '|' };
+        for (int f = 0; f < ANIM_FRAMES; f++) {
+            anim_draw(idx, 0, fr[f % 4]);
+            if (anim_pump()) return;
+        }
+        break;
+    }
+    case ANIM_NEWCOMER:           /* the letter rides in from the right */
+        for (int f = ANIM_FRAMES; f >= 1; f--) {
+            anim_draw(idx, f, real);
+            if (anim_pump()) return;
+        }
+        break;
+    case ANIM_PLACEMENT:          /* pieces snap in from every side */
+        for (int f = ANIM_FRAMES; f >= 1; f--) {
+            anim_draw(idx, rand() % 7 - 3, rand_anim_glyph());
+            if (anim_pump()) return;
+        }
+        break;
+    default:
+        return;
+    }
+    anim_draw(idx, 0, real);      /* settle on the real character */
+}
+
 /* ── History navigation ───────────────────────────────────────────── */
 static void hist_up(void)
 {
@@ -917,6 +1036,7 @@ char *edit_line(const char *prompt_txt, int *cancelled)
                 } else {
                     bins(&e, e.cur, cp);
                     e.cur++;
+                    ed_animate(e.cur - 1);
                     goto edited;
                 }
             }

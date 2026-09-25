@@ -131,6 +131,12 @@ const Bind  *bind_lookup(int mods, int key);
 void         bind_dump(FILE *f);
 
 /* ---- config.c ---- */
+#define ANIM_NONE      0    /* typed-character animation styles        */
+#define ANIM_MATRIX    1
+#define ANIM_NEWCOMER  2
+#define ANIM_PLACEMENT 3
+#define ANIM_SPINNER   4
+
 typedef struct {
     char  *looks;          /* prompt template; NULL → PS1/default      */
     char  *rightwall;      /* styles                                   */
@@ -160,6 +166,7 @@ typedef struct {
     int    autoreload;     /* 1 = re-source rc files when they change  */
     int    history_limit;  /* max commands kept in history             */
     int    history_enabled;/* 1 = record + save command history        */
+    int    animation;      /* typed-character animation (ANIM_*)       */
 } Config;
 
 extern Config Cfg;
