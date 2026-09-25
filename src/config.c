@@ -2,29 +2,41 @@
 #include <time.h>
 
 /* ── Color presets ─────────────────────────────────────────────────── */
-typedef struct { const char *name; const char *sgr; } ColorSpec;
+typedef struct {
+    const char *name;
+    const char *sgr;
+    uint8_t r, g, b;        /* sRGB, used for opacity blending */
+} ColorSpec;
 
 static const ColorSpec colors[] = {
-    { "black",        "30" },
-    { "red",          "31" },
-    { "green",        "32" },
-    { "yellow",       "33" },
-    { "blue",         "34" },
-    { "purple",       "35" },   /* magenta */
-    { "cyan",         "36" },
-    { "white",        "37" },
-    { "grey",         "90" },   /* bright black */
-    { "pink",         "95" },   /* bright magenta */
-    { "brightred",    "91" },
-    { "brightgreen",  "92" },
-    { "brightyellow", "93" },
-    { "brightblue",   "94" },
-    { "brightcyan",   "96" },
-    { "brightwhite",  "97" },
-    { "default",      "39" },
-    { "none",          "" },
+    { "black",        "30",   0,   0,   0 },
+    { "red",          "31", 205,  49,  49 },
+    { "green",        "32",  13, 188, 121 },
+    { "yellow",       "33", 229, 229,  16 },
+    { "blue",         "34",  36, 114, 200 },
+    { "purple",       "35", 188,  63, 188 },   /* magenta */
+    { "cyan",         "36",  17, 168, 205 },
+    { "white",        "37", 229, 229, 229 },
+    { "grey",         "90", 102, 102, 102 },   /* bright black */
+    { "pink",         "95", 255, 105, 180 },   /* bright magenta */
+    { "brightred",    "91", 255,  84,  84 },
+    { "brightgreen",  "92",   5, 221, 139 },
+    { "brightyellow", "93", 255, 255,  64 },
+    { "brightblue",   "94",  90, 140, 255 },
+    { "brightcyan",   "96", 102, 229, 255 },
+    { "brightwhite",  "97", 255, 255, 255 },
+    { "default",      "39",   0,   0,   0 },   /* terminal default fg */
+    { "none",          "",   0,   0,   0 },
 };
 #define NCOLORS ((int)(sizeof colors / sizeof colors[0]))
+
+static const ColorSpec *find_spec(const char *sgr)
+{
+    if (!sgr) return NULL;
+    for (int i = 0; i < NCOLORS; i++)
+        if (!strcmp(colors[i].sgr, sgr)) return &colors[i];
+    return NULL;
+}
 
 Config Cfg;
 
@@ -53,6 +65,16 @@ void config_init(void)
     Cfg.col_path      = NULL;
     Cfg.col_cursor    = NULL;
     Cfg.col_guess     = NULL;
+    Cfg.col_user      = NULL;
+    Cfg.textcolor     = NULL;
+    Cfg.op_rightwall  = -1;
+    Cfg.op_leftwall   = -1;
+    Cfg.op_sep        = -1;
+    Cfg.op_host       = -1;
+    Cfg.op_user       = -1;
+    Cfg.op_path       = -1;
+    Cfg.op_cursor     = -1;
+    Cfg.op_guess      = -1;
 }
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
@@ -88,11 +110,30 @@ static void set_color(char **slot, const char *v)
     dprintf(STDERR_FILENO, "%s: unknown color: '%s'\n", THESH_NAME, v);
 }
 
+/* Parse `100%` / `65` / `'65%'`. Stores 0-100, or -1 when the value is
+ * empty/unparsable. Returns 1 when a value was supplied. */
+static int parse_opacity(const char *v, int *out)
+{
+    *out = -1;
+    if (!v || !*v) return 1;
+    const char *s = v;
+    if (*s == '"' || *s == '\'') s++;
+    while (*s && isspace((unsigned char)*s)) s++;
+    char *end = NULL;
+    long n = strtol(s, &end, 10);
+    if (end == s) return 0;
+    if (*end == '%') end++;
+    if (n < 0) n = 0;
+    if (n > 100) n = 100;
+    *out = (int)n;
+    return 1;
+}
+
 /* Apply one config directive. Returns 1 if it was a known option
  * (consumed), 0 otherwise so callers can fall through to execution. */
 int config_set_option(const char *key, const char *val)
 {
-    if (!strcmp(key, "looks"))          { set_str(&Cfg.looks, val); return 1; }
+    if (!strcmp(key, "looks") || !strcmp(key, "layout")) { set_str(&Cfg.looks, val); return 1; }
     if (!strcmp(key, "rightwallstyle")) { set_str(&Cfg.rightwall, val); return 1; }
     if (!strcmp(key, "leftwallstyle"))  { set_str(&Cfg.leftwall, val); return 1; }
     if (!strcmp(key, "seperatorstyle")) { set_str(&Cfg.sep, val); return 1; }
@@ -104,6 +145,16 @@ int config_set_option(const char *key, const char *val)
     if (!strcmp(key, "path-color"))      { set_color(&Cfg.col_path, val); return 1; }
     if (!strcmp(key, "cursor-color"))    { set_color(&Cfg.col_cursor, val); return 1; }
     if (!strcmp(key, "guesser-color"))   { set_color(&Cfg.col_guess, val); return 1; }
+    if (!strcmp(key, "user-color"))      { set_color(&Cfg.col_user, val); return 1; }
+    if (!strcmp(key, "textcolor"))       { set_color(&Cfg.textcolor, val); return 1; }
+    if (!strcmp(key, "rightwall-opacity")) { parse_opacity(val, &Cfg.op_rightwall); return 1; }
+    if (!strcmp(key, "leftwall-opacity"))  { parse_opacity(val, &Cfg.op_leftwall); return 1; }
+    if (!strcmp(key, "seperator-opacity")) { parse_opacity(val, &Cfg.op_sep); return 1; }
+    if (!strcmp(key, "hostname-opacity"))  { parse_opacity(val, &Cfg.op_host); return 1; }
+    if (!strcmp(key, "user-opacity"))      { parse_opacity(val, &Cfg.op_user); return 1; }
+    if (!strcmp(key, "path-opacity"))      { parse_opacity(val, &Cfg.op_path); return 1; }
+    if (!strcmp(key, "cursor-opacity"))    { parse_opacity(val, &Cfg.op_cursor); return 1; }
+    if (!strcmp(key, "guesser-opacity"))   { parse_opacity(val, &Cfg.op_guess); return 1; }
     if (!strcmp(key, "typing")) {
         Cfg.hybrid = (val && !strcasecmp(val, "hybrid")) ? 1 : 0;
         return 1;
@@ -123,9 +174,13 @@ int config_set_option(const char *key, const char *val)
 
 /* ── Known option names (rc / interactive interception) ───────────── */
 static const char *known_keys[] = {
-    "looks", "rightwallstyle", "leftwallstyle", "seperatorstyle",
+    "looks", "layout", "rightwallstyle", "leftwallstyle", "seperatorstyle",
     "cursorstyle", "rightwall-color", "leftwall-color", "seperator-color",
     "hostname-color", "path-color", "cursor-color", "guesser-color",
+    "user-color", "textcolor",
+    "rightwall-opacity", "leftwall-opacity", "seperator-opacity",
+    "hostname-opacity", "user-opacity", "path-opacity", "cursor-opacity",
+    "guesser-opacity",
     "typing", "guesser", "corrector", "autoreload",
 };
 
@@ -145,6 +200,8 @@ int config_apply_line(const char *line)
     const char *p = line;
     while (*p && isspace((unsigned char)*p)) p++;
     if (!*p || *p == '#') return 0;
+
+    if (bind_parse_line(line)) return 1;        /* user key binding */
 
     const char *k = p;
     while (*p && !isspace((unsigned char)*p) && *p != '=' && *p != ':') p++;
@@ -169,6 +226,9 @@ int config_apply_line(const char *line)
     if (vlen >= 2 && (*p == '"' || *p == '\'') && p[vlen - 1] == *p) {
         memcpy(val, p + 1, vlen - 2);
         vi = vlen - 2;
+    } else if (*p == '"' || *p == '\'') {       /* tolerate a missing close */
+        memcpy(val, p + 1, vlen - 1);
+        vi = vlen - 1;
     } else {
         memcpy(val, p, vlen + 1);
         vi = vlen;
@@ -208,7 +268,16 @@ static void pcat_part(char **out, size_t *cap, size_t *len,
 /* Render a looks template. Keywords: $USER $HOSTNAME $SEPERATOR
  * $RIGHTWALL $LEFTWALL $PATH (or $DIR/$PWD) $CURSOR $SPACER. Literal
  * whitespace between tokens is ignored — use $SPACER for explicit gaps;
- * any other literal text is kept as typed. */
+ * any other literal text is kept as typed. Each element takes its own
+ * color when set, otherwise `textcolor`; opacity blends toward the
+ * terminal default (assumed dark background). */
+static void pcat_lit(char **out, size_t *cap, size_t *len, char *lit, int *colored)
+{
+    char sgb[24] = "";
+    if (Cfg.textcolor) color_sgr(Cfg.textcolor, 100, sgb, sizeof sgb);
+    pcat_part(out, cap, len, lit, sgb[0] ? sgb : NULL, colored);
+}
+
 char *render_looks_str(const char *tpl, const char *user, const char *host,
                        const char *dir)
 {
@@ -238,26 +307,30 @@ char *render_looks_str(const char *tpl, const char *user, const char *host,
             }
 
             while (li > 0 && isspace((unsigned char)lit[li - 1])) li--;
-            if (li > 0) { lit[li] = 0; pcat(&out, &cap, &len, lit); li = 0; }
+            if (li > 0) { lit[li] = 0; pcat_lit(&out, &cap, &len, lit, &colored); li = 0; }
 
             if (!strcmp(tok, "SPACER")) { pcat(&out, &cap, &len, " "); continue; }
 
-            const char *txt = NULL, *sgr = NULL;
-            if      (!strcmp(tok, "USER"))      { txt = user; }
-            else if (!strcmp(tok, "HOSTNAME"))  { txt = host; sgr = Cfg.col_host; }
-            else if (!strcmp(tok, "SEPERATOR")) { txt = Cfg.sep; sgr = Cfg.col_sep; }
-            else if (!strcmp(tok, "RIGHTWALL")) { txt = Cfg.rightwall; sgr = Cfg.col_rightwall; }
-            else if (!strcmp(tok, "LEFTWALL"))  { txt = Cfg.leftwall; sgr = Cfg.col_leftwall; }
+            const char *txt = NULL, *csgr = NULL;
+            int eop = 100;
+            if      (!strcmp(tok, "USER"))      { txt = user; csgr = Cfg.col_user; eop = Cfg.op_user; }
+            else if (!strcmp(tok, "HOSTNAME"))  { txt = host; csgr = Cfg.col_host; eop = Cfg.op_host; }
+            else if (!strcmp(tok, "SEPERATOR")) { txt = Cfg.sep; csgr = Cfg.col_sep; eop = Cfg.op_sep; }
+            else if (!strcmp(tok, "RIGHTWALL")) { txt = Cfg.rightwall; csgr = Cfg.col_rightwall; eop = Cfg.op_rightwall; }
+            else if (!strcmp(tok, "LEFTWALL"))  { txt = Cfg.leftwall; csgr = Cfg.col_leftwall; eop = Cfg.op_leftwall; }
             else if (!strcmp(tok, "PATH") || !strcmp(tok, "DIR") ||
-                     !strcmp(tok, "PWD"))       { txt = dir; sgr = Cfg.col_path; }
-            else if (!strcmp(tok, "CURSOR"))    { txt = Cfg.cursor; sgr = Cfg.col_cursor; }
+                     !strcmp(tok, "PWD"))       { txt = dir; csgr = Cfg.col_path; eop = Cfg.op_path; }
+            else if (!strcmp(tok, "CURSOR"))    { txt = Cfg.cursor; csgr = Cfg.col_cursor; eop = Cfg.op_cursor; }
             else {                             /* unknown token → literal */
                 if (li < (int)sizeof lit - 1) lit[li++] = '$';
                 for (size_t i = 0; i < ti && li < (int)sizeof lit - 1; i++)
                     lit[li++] = tok[i];
                 continue;
             }
-            pcat_part(&out, &cap, &len, txt, sgr, &colored);
+            if (!csgr) csgr = Cfg.textcolor;    /* general text color */
+            char sgb[24] = "";
+            if (csgr) color_sgr(csgr, eop, sgb, sizeof sgb);
+            pcat_part(&out, &cap, &len, txt, sgb[0] ? sgb : NULL, &colored);
         } else {
             if (li < (int)sizeof lit - 1) lit[li++] = *p;
             p++;
@@ -265,9 +338,53 @@ char *render_looks_str(const char *tpl, const char *user, const char *host,
     }
 
     while (li > 0 && isspace((unsigned char)lit[li - 1])) li--;
-    if (li > 0) { lit[li] = 0; pcat(&out, &cap, &len, lit); }
+    if (li > 0) { lit[li] = 0; pcat_lit(&out, &cap, &len, lit, &colored); }
     if (colored) pcat(&out, &cap, &len, "\033[0m");
     return out;
+}
+
+/* ── SGR emission with opacity ────────────────────────────────────── */
+/* Write the SGR number(s) for a stored color string (or its name) at
+ * the given opacity (0-100, -1 = unset = full). `default`/unset emit
+ * nothing below 100% opacity; below 100% the color is blended toward
+ * black and emitted as a 256-color foreground code. */
+static int cube_index(int r, int g, int b)
+{
+    int best = 16, bestd = INT_MAX;
+    for (int ri = 0; ri < 6; ri++) {
+        int rv = ri == 0 ? 0 : 95 + (ri - 1) * 40;
+        for (int gi = 0; gi < 6; gi++) {
+            int gv = gi == 0 ? 0 : 95 + (gi - 1) * 40;
+            for (int bi = 0; bi < 6; bi++) {
+                int bv = bi == 0 ? 0 : 95 + (bi - 1) * 40;
+                int dr = r - rv, dg = g - gv, db = b - bv;
+                int d = dr * dr + dg * dg + db * db;
+                if (d < bestd) { bestd = d; best = 16 + 36 * ri + 6 * gi + bi; }
+            }
+        }
+    }
+    return best;
+}
+
+void color_sgr(const char *sgr, int opacity, char *buf, size_t sz)
+{
+    buf[0] = 0;
+    if (!sgr || !sgr[0]) return;
+    if (opacity < 0) opacity = 100;
+    if (opacity > 100) opacity = 100;
+
+    if (!strcmp(sgr, "39")) {               /* `default`: strictly default */
+        if (opacity >= 100) snprintf(buf, sz, "39");
+        return;
+    }
+    const ColorSpec *sp = find_spec(sgr);
+    if (!sp) { snprintf(buf, sz, "%s", sgr); return; }
+    if (opacity >= 100) { snprintf(buf, sz, "%s", sp->sgr); return; }
+
+    int r = (int)sp->r * opacity / 100;
+    int g = (int)sp->g * opacity / 100;
+    int b = (int)sp->b * opacity / 100;
+    snprintf(buf, sz, "38;5;%d", cube_index(r, g, b));
 }
 
 /* ── $PS1 expansion (bash-style subset) ───────────────────────────── */

@@ -2,22 +2,6 @@
 #include <stdbool.h>
 #include <sys/stat.h>
 
-/* ── Key codes ────────────────────────────────────────────────────── */
-enum {
-    K_NONE = 256,           /* raw codepoint returned in `cp` */
-    K_EOF,
-    K_TAB,
-    K_ENTER,
-    K_DEL,                  /* backspace */
-    K_FDEL,                 /* forward delete key */
-    K_UP, K_DOWN, K_LEFT, K_RIGHT,
-    K_HOME, K_END, K_PGUP, K_PGDN,
-    K_WLEFT, K_WRIGHT,      /* word / ctrl / alt movement */
-    K_CTL_A, K_CTL_E, K_CTL_B, K_CTL_F,
-    K_CTL_K, K_CTL_U, K_CTL_W, K_CTL_L, K_CTL_R,
-    K_CTL_C, K_CTL_D,
-};
-
 /* ── Editing buffer (array of codepoints) ─────────────────────────── */
 typedef struct {
     uint32_t *v;
@@ -118,13 +102,32 @@ static int read_byte(void)
     return c;
 }
 
-static int parse_seq(const char *s, int n, uint32_t *cp)
+/* Decode an xterm modifier number (2=shift, 3/4=alt, 5/6=ctrl,
+ * 7/8=alt+ctrl) into MOD_* bits. */
+static int mod_bits(int mod)
+{
+    if (mod <= 1) return 0;
+    int m = mod - 1;
+    int bits = 0;
+    if (m & 2) bits |= MOD_ALT;
+    if (m & 4) bits |= MOD_CTRL;
+    return bits;
+}
+
+static int parse_seq(const char *s, int n, uint32_t *cp, int *mods)
 {
     if (n == 1) { *cp = 27; return K_NONE; }                      /* bare ESC */
 
     if (n == 2 && s[0] == 27) {                                   /* Alt+X */
-        if (s[1] == 'b') return K_WLEFT;
-        if (s[1] == 'f') return K_WRIGHT;
+        if (s[1] == 'b') { *mods |= MOD_ALT; return K_WLEFT; }
+        if (s[1] == 'f') { *mods |= MOD_ALT; return K_WRIGHT; }
+        if ((unsigned char)s[1] < 0x20) {                         /* Ctrl+Alt+X */
+            *mods |= MOD_CTRL | MOD_ALT;
+            *cp = (unsigned char)s[1];
+            return K_NONE;
+        }
+        if ((unsigned char)s[1] == 0x7f) { *mods |= MOD_ALT; *cp = 0x7f; return K_NONE; }
+        *mods |= MOD_ALT;
         *cp = (unsigned char)s[1];
         return K_NONE;
     }
@@ -140,7 +143,7 @@ static int parse_seq(const char *s, int n, uint32_t *cp)
         if (i < n && isdigit((unsigned char)s[i])) {
             int j = i;
             while (j < n && isdigit((unsigned char)s[j])) j++;
-            mod = 1;
+            mod = 0;
             for (int k = i; k < j; k++) mod = mod * 10 + (s[k] - '0');
             i = j;
         }
@@ -148,10 +151,10 @@ static int parse_seq(const char *s, int n, uint32_t *cp)
         if (n > 2 && s[1] == 'O') fin = s[n - 1];
 
         switch (fin) {
-        case 'A': return (mod == 3) ? K_WLEFT : K_UP;
-        case 'B': return (mod == 3) ? K_WRIGHT : K_DOWN;
-        case 'C': return (mod == 3 || mod == 5) ? K_WRIGHT : K_RIGHT;
-        case 'D': return (mod == 3 || mod == 5) ? K_WLEFT : K_LEFT;
+        case 'A': *mods |= mod_bits(mod); return (mod == 3) ? K_WLEFT : K_UP;
+        case 'B': *mods |= mod_bits(mod); return (mod == 3) ? K_WRIGHT : K_DOWN;
+        case 'C': *mods |= mod_bits(mod); return (mod == 3 || mod == 5) ? K_WRIGHT : K_RIGHT;
+        case 'D': *mods |= mod_bits(mod); return (mod == 3 || mod == 5) ? K_WLEFT : K_LEFT;
         case 'H': return K_HOME;
         case 'F': return K_END;
         case 'M': return K_ENTER;
@@ -170,8 +173,9 @@ static int parse_seq(const char *s, int n, uint32_t *cp)
     return K_NONE;
 }
 
-static int read_key(uint32_t *cp)
+static int read_key(uint32_t *cp, int *mods)
 {
+    *mods = 0;
     int c = read_byte();
     if (c < 0) return K_EOF;
 
@@ -185,10 +189,12 @@ static int read_key(uint32_t *cp)
             if (b < 0) break;
             seq[n++] = (char)b;
         }
-        return parse_seq(seq, n, cp);
+        return parse_seq(seq, n, cp, mods);
     }
 
     if (c == EOF) return K_EOF;
+
+    if (c < 0x20) *mods = MOD_CTRL;       /* raw control byte */
 
     /* Plain (possibly UTF-8) character. */
     char raw[4];
@@ -384,8 +390,10 @@ static void ed_draw(void)
     bdump(&e, e.cur, e.len);
     if (gh.len) {
         if (Cfg.col_guess) {
-            char wrap[16];
-            snprintf(wrap, sizeof wrap, "\033[%sm", Cfg.col_guess);
+            char sgb[24] = "";
+            color_sgr(Cfg.col_guess, Cfg.op_guess, sgb, sizeof sgb);
+            char wrap[32] = "";
+            if (sgb[0]) snprintf(wrap, sizeof wrap, "\033[%sm", sgb);
             out(wrap);
             bdump(&gh, 0, gh.len);
             out("\033[0m");
@@ -500,6 +508,109 @@ static char *edit_line_fallback(void)
     return xstrdup(buf);
 }
 
+/* ── User key bindings (copy / paste / exec / close) ──────────────── */
+static const char b64tab[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static char *b64encode(const unsigned char *in, size_t n)
+{
+    size_t olen = (n + 2) / 3 * 4 + 1;
+    char *o = xmalloc(olen);
+    size_t i = 0, j = 0;
+    while (i + 2 < n) {
+        uint32_t v = ((uint32_t)in[i] << 16) | ((uint32_t)in[i + 1] << 8) | in[i + 2];
+        o[j++] = b64tab[(v >> 18) & 63];
+        o[j++] = b64tab[(v >> 12) & 63];
+        o[j++] = b64tab[(v >> 6) & 63];
+        o[j++] = b64tab[v & 63];
+        i += 3;
+    }
+    if (i < n) {
+        uint32_t v = (uint32_t)in[i] << 16;
+        size_t rem = n - i;
+        if (rem == 2) v |= (uint32_t)in[i + 1] << 8;
+        o[j++] = b64tab[(v >> 18) & 63];
+        o[j++] = b64tab[(v >> 12) & 63];
+        o[j++] = rem == 2 ? b64tab[(v >> 6) & 63] : '=';
+        o[j++] = '=';
+    }
+    o[j] = 0;
+    return o;
+}
+
+static char *clip = NULL;                 /* internal clipboard */
+
+static void clip_set(const char *s)
+{
+    free(clip);
+    clip = xstrdup(s);
+    char *b = b64encode((const unsigned char *)s, strlen(s));
+    out("\x1b]52;c;");                    /* OSC 52, best effort */
+    out(b);
+    out("\x1b\\");
+    free(b);
+}
+
+static void clip_paste(void)
+{
+    const char *p = clip;
+    while (p && *p) {
+        int n;
+        uint32_t c;
+        utf8_decode(p, &n, &c);
+        if (c >= 0x20 && c != 0x7f) {
+            bins(&e, e.cur, c);
+            e.cur++;
+        }
+        p += n;
+    }
+}
+
+/* Run a bound action. Returns 1 when the shell should exit. */
+static int bind_run(const Bind *b)
+{
+    switch (b->kind) {
+    case BIND_CLOSE:
+        out("\r\n");
+        return 1;
+    case BIND_COPY: {
+        char *t = btext(&e);
+        clip_set(t);
+        free(t);
+        out("\r\n");
+        outf("%s: copied\r\n", THESH_NAME);
+        return 0;
+    }
+    case BIND_PASTE:
+        clip_paste();
+        return 0;
+    case BIND_EXEC: {
+        char cmd[BIND_CMD_MAX * 2 + 8];
+        if (b->ask[0]) {
+            term_exit_raw();
+            out("\r\n");
+            outf("%s : ", b->ask);
+            fflush(stdout);
+            char input[BIND_CMD_MAX];
+            input[0] = 0;
+            if (fgets(input, sizeof input, stdin)) {
+                size_t nl = strlen(input);
+                while (nl && (input[nl - 1] == '\n' || input[nl - 1] == '\r'))
+                    input[--nl] = 0;
+            }
+            snprintf(cmd, sizeof cmd, "%s %s", b->cmd, input);
+            term_enter_raw();
+        } else {
+            snprintf(cmd, sizeof cmd, "%s", b->cmd);
+        }
+        out("\r\n");
+        exec_line(cmd);
+        return 0;
+    }
+    }
+    return 0;
+}
+
 /* ── The main line editor ─────────────────────────────────────────── */
 char *edit_line(const char *prompt_txt, int *cancelled)
 {
@@ -528,8 +639,25 @@ char *edit_line(const char *prompt_txt, int *cancelled)
         if (rsearch_on) rsearch_draw();
 
         uint32_t cp = 0;
-        int key = read_key(&cp);
+        int mods = 0;
+        int key = read_key(&cp, &mods);
         int control = (key == K_NONE && cp < 0x20);
+
+        /* user bindings intercept before the default key actions */
+        if (key == K_NONE && (cp == 0x0d || cp == 0x0a)) {
+            /* Enter bytes — these are CR/LF, never shadowed by a binding */
+        } else {
+            int bkey = key;                         /* named keys pass through */
+            if (key == K_NONE) {
+                if (cp > 0 && cp < 0x1b) bkey = (int)cp + 0x60;   /* ctrl letter */
+                else bkey = (int)cp;                                /* plain char */
+            }
+            const Bind *bd = bind_lookup(mods, bkey);
+            if (bd) {
+                if (bind_run(bd)) { eof = 1; goto done; }
+                continue;
+            }
+        }
 
         /* map plain control keys */
         if (key == K_NONE && control) {

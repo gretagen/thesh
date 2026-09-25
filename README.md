@@ -134,11 +134,13 @@ seperatorstyle : '|'
 looks = "$RIGHTWALL $SPACER $USER $SPACER $SEPERATOR $SPACER $HOSTNAME $SPACER $LEFTWALL $SPACER $PATH $SPACER $CURSOR"
 ```
 
+`layout` is an alias for `looks` (same template, either spelling works).
+
 ### Prompt elements
 
 | Key               | Default | Meaning                       |
 |-------------------|---------|-------------------------------|
-| `looks`           | —       | prompt template (see above)   |
+| `looks` / `layout`| —       | prompt template (see above)   |
 | `rightwallstyle`  | `[`     | right wall glyph              |
 | `leftwallstyle`   | `]`     | left wall glyph               |
 | `seperatorstyle`  | `\|`    | separator glyph (sic: `SEPERATOR`) |
@@ -154,13 +156,53 @@ looks = "$RIGHTWALL $SPACER $USER $SPACER $SEPERATOR $SPACER $HOSTNAME $SPACER $
 | `hostname-color`   | hostname       |
 | `path-color`       | directory      |
 | `cursor-color`     | cursor glyph   |
+| `user-color`       | `$USER`        |
 | `guesser-color`    | ghost suggestion |
+| `textcolor`        | general text color: literals in the template and any element without a specific color |
 
-`guesser-color` recolors the dim ghost text; without it, ghosts render dim.
+`textcolor` is the fallback for every element that has no specific `…-color`
+set, and for literal (non-token) text in the `looks` template. Elements with
+their own color always win over it.
 
 Available colors: `black red green yellow blue purple cyan white grey pink`,
-each with a `bright-` variant (e.g. `bright-blue`), plus `default` (terminal
-default) and `none` (no color). Example: `path-color = 'green'`.
+each with a `bright-` variant (e.g. `bright-blue`), plus `default` and `none`:
+
+* `default` — no color change: the element renders strictly in the terminal's
+  default foreground (and breaks out of any color from the preceding element).
+* `none` — no color code at all (the element inherits whatever is active).
+
+Example: `path-color = 'green'`.
+
+### Opacity
+
+Every colorable prompt element accepts an opacity percentage:
+
+| Key                   | Applies to       |
+|-----------------------|------------------|
+| `rightwall-opacity`   | right wall       |
+| `leftwall-opacity`    | left wall        |
+| `seperator-opacity`   | separator        |
+| `hostname-opacity`    | hostname         |
+| `user-opacity`        | `$USER`          |
+| `path-opacity`        | directory        |
+| `cursor-opacity`      | cursor glyph     |
+| `guesser-opacity`     | ghost suggestion |
+
+Values are percentages written with or without `%`, quoted or bare
+(`'100%'`, `65`, `'50%'`). At 100% the element uses its plain ANSI color. Below
+100% the color is blended toward black (the assumed dark default background)
+and emitted as a 256-color code — so `guesser-opacity = '65%'` renders a
+faded ghost. Opacity only has an effect on a colored element (it needs
+`…-color` to work with; `default` at <100% renders as no color).
+
+Example:
+
+```sh
+hostname-color = 'red'
+hostname-opacity = '50%'
+guesser-color = 'grey'
+guesser-opacity = '65%'
+```
 
 ### Behavior options
 
@@ -170,6 +212,42 @@ default) and `none` (no color). Example: `path-color = 'green'`.
 | `guesser`  | `yes`      | `yes`/`no` — ghost suggestions on or off                  |
 | `corrector`| `passive`  | `passive` prints "Did you mean …?"; `active` auto-runs the fix; `consent` prompts `[y/N]`; `inactive` suppresses suggestions |
 | `autoreload`| `yes`     | `yes`/`no` — re-source rc files automatically when they change on disk |
+
+### Key bindings
+
+Shortcuts are defined in the config with `+`-joined modifiers and a key on the
+left, and an action on the right:
+
+```sh
+ALT + T        = exec('top')              # run a command
+CTRL + ALT + V = paste                    # paste the line clipboard
+CTRL + ALT + C = copy                     # copy the current line (also OSC 52)
+CTRL + C       = close                    # exit the shell
+ALT + M        = "exec('micro') ask(path?)"
+CTRL + Z       = "exec('zeta')  ask(action?)"
+```
+
+> **Enter is `CTRL + M` (and `CTRL + J`)** at the byte level, so those two
+> keys can't be rebound — the submit key always wins. Every other key is
+> fair game (including `CTRL + C`, if you really want to bind `close` to it).
+
+* **Modifiers** — `CTRL`, `ALT`, joined with `+`. Keys are a single letter,
+  digit or symbol (case-insensitive), or a name: `ENTER TAB SPACE BACKSPACE
+  DELETE UP DOWN LEFT RIGHT HOME END PGUP PGDN ESC`.
+* **Actions**:
+  * `exec('cmd')` — run `cmd` (useful for shortcuts to interactive tools).
+  * `ask(label)` — after `exec(...)`: prompt `label : ` on its own line, then
+    append the typed text to the command. `ALT + M = "exec('micro') ask(path?)"`
+    prompts `path? : `, and answering `/etc/theshrc` runs `micro /etc/theshrc`.
+  * `copy` — copy the current line (shell clipboard + best-effort OSC 52 to the
+    terminal's clipboard). `paste` — insert the last copied text at the cursor.
+  * `close` — exit the shell.
+* Bindings are looked up **before** the built-in key handling, so a bound key
+  replaces that key's default action (e.g. binding `CTRL + C` overrides the
+  cancel-line key). Unbound keys keep their defaults. Comments can be removed
+  and the same binding redefined later — the last definition wins.
+
+Example bindings and the `ask` flow are included in `theshrc.sample`.
 
 ### Auto-reload
 

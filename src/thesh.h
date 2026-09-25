@@ -87,6 +87,42 @@ int     edit_distance(const char *a, const char *b);
 const char *best_suggestion(const char *word);
 void    print_suggestion(const char *word);
 
+/* ---- key codes (editor + user bindings) ---- */
+enum {
+    K_NONE = 256,           /* raw codepoint returned in `cp` */
+    K_EOF,
+    K_TAB,
+    K_ENTER,
+    K_DEL,                  /* backspace */
+    K_FDEL,                 /* forward delete key */
+    K_UP, K_DOWN, K_LEFT, K_RIGHT,
+    K_HOME, K_END, K_PGUP, K_PGDN,
+    K_WLEFT, K_WRIGHT,      /* word / ctrl / alt movement */
+    K_CTL_A, K_CTL_E, K_CTL_B, K_CTL_F,
+    K_CTL_K, K_CTL_U, K_CTL_W, K_CTL_L, K_CTL_R,
+    K_CTL_C, K_CTL_D,
+};
+#define MOD_CTRL 1
+#define MOD_ALT  2
+
+/* ---- bind.c (user key bindings from the config) ---- */
+#define BIND_MAX 32
+#define BIND_CMD_MAX 256
+#define BIND_ASK_MAX 64
+
+typedef enum { BIND_CLOSE, BIND_COPY, BIND_PASTE, BIND_EXEC } BindKind;
+
+typedef struct {
+    int      mods;          /* MOD_CTRL / MOD_ALT bitmask             */
+    int      key;           /* char code or K_* for named keys        */
+    BindKind kind;
+    char     cmd[BIND_CMD_MAX];  /* exec target                      */
+    char     ask[BIND_ASK_MAX];  /* ask() prompt label ("" = none)    */
+} Bind;
+
+int          bind_parse_line(const char *line);
+const Bind  *bind_lookup(int mods, int key);
+
 /* ---- config.c ---- */
 typedef struct {
     char  *looks;          /* prompt template; NULL → PS1/default      */
@@ -94,13 +130,23 @@ typedef struct {
     char  *leftwall;
     char  *sep;
     char  *cursor;         /* cursorstyle symbol                       */
-    char  *col_rightwall;  /* SGR codes, NULL = no color               */
+    char  *col_rightwall;  /* color names, NULL = no color             */
     char  *col_leftwall;
     char  *col_sep;
     char  *col_host;
     char  *col_path;
     char  *col_cursor;
     char  *col_guess;      /* ghost suggestion color                   */
+    char  *col_user;       /* user-color                               */
+    char  *textcolor;      /* general prompt text color                */
+    int    op_rightwall;   /* per-element opacity (0-100), -1 = unset  */
+    int    op_leftwall;
+    int    op_sep;
+    int    op_host;
+    int    op_user;
+    int    op_path;
+    int    op_cursor;
+    int    op_guess;
     int    hybrid;         /* typing: 1 = hybrid (case-insensitive)    */
     int    guesser;        /* 1 = ghost suggestions on                 */
     int    corrector;      /* 0 passive, 1 active, 2 consent, 3 inactive */
@@ -115,6 +161,7 @@ char    *render_looks_str(const char *tpl, const char *user,
                           const char *host, const char *dir);
 char    *render_ps1(const char *ps1, const char *user,
                     const char *host, const char *dir);
+void     color_sgr(const char *sgr, int opacity, char *buf, size_t sz);
 
 /* ---- editor.c ---- */
 char   *edit_line(const char *prompt, int *cancelled);
