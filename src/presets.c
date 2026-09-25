@@ -33,11 +33,15 @@ static void strip_crlf(char *s)
     while (n && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = 0;
 }
 
-/* Print `prompt`, then read one trimmed line from stdin. */
+/* Print `prompt`, then read one trimmed line from stdin.
+ * ESC/Ctrl+C cancels: returns -1 with an empty buffer (aborts the
+ * surrounding command). Uses the shared raw-mode prompt editor. */
 static int read_line(char *buf, size_t sz, const char *prompt)
 {
-    if (prompt) { outf("%s", prompt); fflush(stdout); }
-    if (!fgets(buf, (int)sz, stdin)) { buf[0] = 0; return -1; }
+    if (prompt_line(buf, sz, prompt) < 0) {
+        buf[0] = 0;
+        return -1;
+    }
     strip_crlf(buf);
     return 0;
 }
@@ -209,8 +213,9 @@ static int preset_apply_flow(const PresetList *pl, int idx)
                       "1 : system\n"
                       "2 : user\n"
                       "3 : both\n"
-                      "> ") == 0)
-            scope = parse_scope(buf);
+                      "> ") < 0)
+            return 0;                                   /* ESC: abort */
+        scope = parse_scope(buf);
     }
 
     int ws = 0, wu = 0;

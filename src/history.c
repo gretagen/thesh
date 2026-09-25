@@ -28,22 +28,45 @@ void hist_setup(void)
 
 void hist_load(void)
 {
+    if (H.loaded) return;
+    H.loaded = 1;
+    if (!Cfg.history_enabled) return;
     FILE *f = fopen(H.path, "r");
     if (!f) return;
     char line[LINE_MAX_CP];
-    while (H.count < H.max && fgets(line, sizeof line, f)) {
+    while (fgets(line, sizeof line, f)) {
         size_t n = strlen(line);
         while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
         if (!n) continue;
+        if (H.max <= 0) break;
         grow();
+        if (H.max > 0 && H.count >= H.max) {
+            free(H.items[0]);
+            memmove(H.items, H.items + 1, sizeof(char *) * (size_t)(H.count - 1));
+            H.count--;
+        }
         H.items[H.count++] = xstrdup(line);
     }
     fclose(f);
 }
 
+void hist_set_limit(int n)
+{
+    if (n < 0) n = 0;
+    if (n > 1000000) n = 1000000;
+    H.max = n;
+    while (H.count > H.max && H.count > 0) {
+        free(H.items[0]);
+        memmove(H.items, H.items + 1, sizeof(char *) * (size_t)(H.count - 1));
+        H.count--;
+    }
+}
+
 void hist_add(const char *line)
 {
     if (!line || !*line) return;
+    if (!Cfg.history_enabled) return;
+    if (H.max <= 0) return;
     if (H.count && strcmp(H.items[H.count - 1], line) == 0) {
         H.dirty = 1;
         return;
@@ -69,6 +92,7 @@ void hist_clear(void)
 void hist_save(void)
 {
     if (!H.dirty) return;
+    if (!Cfg.history_enabled) return;
     FILE *f = fopen(H.path, "w");
     if (!f) return;
     int start = H.count > H.max ? H.count - H.max : 0;

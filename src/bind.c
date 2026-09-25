@@ -6,8 +6,9 @@
  *     CTRL + ALT + V  = paste
  *     CTRL + C        = close
  *     CTRL + M        = "exec('micro') ask(path?)"
- * Left side: one or more of CTRL/ALT joined with `+`, ending in a key
- * (single letter/digit/symbol, or a name such as ENTER/TAB/UP/...).
+ * Left side: one or more of CTRL/ALT/SUPER joined with `+`, ending in
+ * a key (single letter/digit/symbol, or a name such as ENTER/TAB/UP/.../
+ * F1..F24). SUPER also matches WIN/WINDOWS/META in config lines.
  * Right side: `close`, `copy`, `paste`, or `exec('cmd')` optionally
  * followed by `ask(label)` which prompts for one line appended to cmd. */
 
@@ -32,6 +33,8 @@ static int mod_from(const char *t)
 {
     if (ieq(t, "CTRL")) return MOD_CTRL;
     if (ieq(t, "ALT"))  return MOD_ALT;
+    if (ieq(t, "SUPER") || ieq(t, "WIN") || ieq(t, "WINDOWS") ||
+        ieq(t, "META")) return MOD_SUPER;
     return 0;
 }
 
@@ -57,6 +60,12 @@ static int key_from(const char *t)
     if (ieq(t, "PGUP") || ieq(t, "PAGEUP"))     return K_PGUP;
     if (ieq(t, "PGDN") || ieq(t, "PAGEDOWN"))   return K_PGDN;
     if (ieq(t, "ESC")  || ieq(t, "ESCAPE"))     return 27;
+    if (t[0] == 'F' && t[1] && isdigit((unsigned char)t[1])) {
+        char *end = NULL;
+        long n = strtol(t + 1, &end, 10);
+        if (end && !*end && n >= 1 && n <= 24)
+            return K_F1 + (int)n - 1;
+    }
     return 0;
 }
 
@@ -99,6 +108,24 @@ static void parse_exec_action(char *a, Bind *b)
     }
 }
 
+/* Is `t` a bindable named key (for plain-key binds like `F11 = ...`)? */
+static int is_key_token(const char *t)
+{
+    if (t[0] == 'F' && t[1] && isdigit((unsigned char)t[1])) {
+        char *end = NULL;
+        long n = strtol(t + 1, &end, 10);
+        if (end && !*end && n >= 1 && n <= 24) return 1;
+    }
+    return ieq(t, "ENTER") || ieq(t, "TAB") || ieq(t, "SPACE") ||
+           ieq(t, "BACKSPACE") || ieq(t, "BACK") ||
+           ieq(t, "DELETE") || ieq(t, "DEL") ||
+           ieq(t, "UP") || ieq(t, "DOWN") || ieq(t, "LEFT") || ieq(t, "RIGHT") ||
+           ieq(t, "HOME") || ieq(t, "END") ||
+           ieq(t, "PGUP") || ieq(t, "PAGEUP") ||
+           ieq(t, "PGDN") || ieq(t, "PAGEDOWN") ||
+           ieq(t, "ESC") || ieq(t, "ESCAPE");
+}
+
 /* Parse one config line that looks like a key binding. Returns 1 if the
  * line was consumed as a binding (even when malformed), else 0. */
 int bind_parse_line(const char *line)
@@ -108,7 +135,9 @@ int bind_parse_line(const char *line)
     char *t = svtrim(buf);
     if (!*t || *t == '#') return 0;
 
-    /* First word must be a modifier. */
+    /* First word must be a modifier (CTRL/ALT/SUPER/...) or a named key
+     * so plain `F11 = ...` / `UP = ...` binds parse, while ordinary
+     * command/config lines fall through. */
     {
         const char *sp = t;
         while (*sp && !isspace((unsigned char)*sp) && *sp != '+' && *sp != '=') sp++;
@@ -117,7 +146,7 @@ int bind_parse_line(const char *line)
         char first[16];
         memcpy(first, t, fl);
         first[fl] = 0;
-        if (!ieq(first, "CTRL") && !ieq(first, "ALT")) return 0;
+        if (!mod_from(first) && !is_key_token(first)) return 0;
     }
 
     char *eq = strchr(t, '=');
@@ -132,13 +161,13 @@ int bind_parse_line(const char *line)
     for (char *tok = strtok_r(t, "+", &save); tok && nt < 16;
          tok = strtok_r(NULL, "+", &save))
         toks[nt++] = svtrim(tok);
-    if (nt < 2) return 0;
+    if (nt < 1) return 0;
 
     int mods = 0;
     for (int i = 0; i < nt - 1; i++) {
         int m = mod_from(toks[i]);
         if (!m) {
-            dprintf(STDERR_FILENO, "%s: bind: unknown modifier '%s' (use CTRL/ALT)\n",
+            dprintf(STDERR_FILENO, "%s: bind: unknown modifier '%s' (use CTRL/ALT/SUPER)\n",
                     THESH_NAME, toks[i]);
             return 1;
         }
@@ -225,7 +254,14 @@ static const char *key_token_name(int key)
     case K_PGUP:      return "PAGEUP";
     case K_PGDN:      return "PAGEDOWN";
     case 27:          return "ESC";
-    default:          return NULL;
+    default: {
+        if (key >= K_F1 && key <= K_F24) {
+            static char fb[8];
+            snprintf(fb, sizeof fb, "F%d", key - K_F1 + 1);
+            return fb;
+        }
+        return NULL;
+    }
     }
 }
 
@@ -260,6 +296,10 @@ void bind_dump(FILE *f)
         if (b->mods & MOD_ALT) {
             if (b->mods & MOD_CTRL) fputs(" + ALT", f);
             else                    fputs("ALT", f);
+        }
+        if (b->mods & MOD_SUPER) {
+            if (b->mods & (MOD_CTRL | MOD_ALT)) fputs(" + SUPER", f);
+            else                                fputs("SUPER", f);
         }
         fputs(" + ", f);
         const char *nm = key_token_name(b->key);

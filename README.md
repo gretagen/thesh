@@ -212,6 +212,8 @@ guesser-opacity = '65%'
 | `guesser`  | `yes`      | `yes`/`no` — ghost suggestions on or off                  |
 | `corrector`| `passive`  | `passive` prints "Did you mean …?"; `active` auto-runs the fix; `consent` prompts `[y/N]`; `inactive` suppresses suggestions |
 | `autoreload`| `yes`     | `yes`/`no` — re-source rc files automatically when they change on disk |
+| `history`  | `yes`      | `yes`/`no` — record new commands and save them on exit |
+| `historylimit` | `500`  | any number — max commands kept in history (oldest are trimmed; `0` disables) |
 
 ### Key bindings
 
@@ -225,20 +227,30 @@ CTRL + ALT + C = copy                     # copy the current line (also OSC 52)
 CTRL + C       = close                    # exit the shell
 ALT + M        = "exec('micro') ask(path?)"
 CTRL + Z       = "exec('zeta')  ask(action?)"
+SUPER + UP     = exec('echo super pressed')   # Windows/Super key + arrow
+F11            = exec('toggle')               # plain function key, no modifier
+ALT + F5       = exec('reload')
 ```
 
 > **Enter is `CTRL + M` (and `CTRL + J`)** at the byte level, so those two
 > keys can't be rebound — the submit key always wins. Every other key is
 > fair game (including `CTRL + C`, if you really want to bind `close` to it).
 
-* **Modifiers** — `CTRL`, `ALT`, joined with `+`. Keys are a single letter,
-  digit or symbol (case-insensitive), or a name: `ENTER TAB SPACE BACKSPACE
-  DELETE UP DOWN LEFT RIGHT HOME END PGUP PGDN ESC`.
+* **Modifiers** — `CTRL`, `ALT`, `SUPER` (the Windows/Super key; `WIN`,
+  `WINDOWS`, `META` are also accepted), joined with `+`. Keys are a single
+  letter, digit or symbol (case-insensitive), or a name: `ENTER TAB SPACE
+  BACKSPACE DELETE UP DOWN LEFT RIGHT HOME END PGUP PGDN ESC F1` through
+  `F24`. A modifier is optional — `F11 = …` binds the plain function key.
+  Terminals report Super/Meta combinations as CSI modifiers (9–16 or 33–40),
+  which the shell decodes to `SUPER`, so `SUPER + UP` works with the arrow
+  keys. Shift is folded into the matched modifier (`SUPER+Shift+UP` still
+  triggers a `SUPER + UP` binding).
 * **Actions**:
   * `exec('cmd')` — run `cmd` (useful for shortcuts to interactive tools).
   * `ask(label)` — after `exec(...)`: prompt `label : ` on its own line, then
     append the typed text to the command. `ALT + M = "exec('micro') ask(path?)"`
     prompts `path? : `, and answering `/etc/theshrc` runs `micro /etc/theshrc`.
+    **ESC, Ctrl+C or Ctrl+D cancels the prompt** without running the command.
   * `copy` — copy the current line (shell clipboard + best-effort OSC 52 to the
     terminal's clipboard). `paste` — insert the last copied text at the cursor.
   * `close` — exit the shell.
@@ -305,6 +317,10 @@ bindings are active on the very next prompt. `presets NAME` applies a preset
 directly without the menu. Non-interactively (e.g. `thesh -c 'presets'`) the
 command just lists the names; with an argument it applies to the user rc.
 
+> **Every prompt in `presets` and `savepreset` (and the `ask(...)` bind
+> prompt) can be cancelled with ESC, Ctrl+C or Ctrl+D** — the pick is
+> discarded and nothing is written.
+
 ### `savepreset` — export your current config
 
 Serializes the effective config — options, colors/opacity, aliases and key
@@ -356,3 +372,16 @@ echo 'ls' | thesh              # read from stdin (no prompt)
 
 Command history is stored in `~/.thesh_history` (max 500 entries). Override the
 path with the `THESH_HISTFILE` environment variable.
+
+The size is configurable, and recording can be turned off entirely:
+
+```sh
+historylimit = 30      # keep only the last 30 commands (any value works)
+history      = yes     # 'no' stops recording and saving (existing file is kept)
+```
+
+The limit is applied when history loads, so with `historylimit = 30` the shell
+starts with only the newest 30 commands from the file, and every additional
+command pushes the oldest one out. `history = no` also clears the in-session
+history (up-arrow recalls nothing) without touching the saved file. Both keys
+are included in `savepreset` exports.

@@ -103,7 +103,9 @@ static int read_byte(void)
 }
 
 /* Decode an xterm modifier number (2=shift, 3/4=alt, 5/6=ctrl,
- * 7/8=alt+ctrl) into MOD_* bits. */
+ * 7/8=alt+ctrl, 9..16=meta, 33..40=super) into MOD_* bits.
+ * Shift is deliberately ignored so SUPER+Shift+Up still hits a
+ * `SUPER + UP` binding. */
 static int mod_bits(int mod)
 {
     if (mod <= 1) return 0;
@@ -111,6 +113,8 @@ static int mod_bits(int mod)
     int bits = 0;
     if (m & 2) bits |= MOD_ALT;
     if (m & 4) bits |= MOD_CTRL;
+    if (m & 8) bits |= MOD_SUPER;    /* meta */
+    if (m & 32) bits |= MOD_SUPER;   /* super */
     return bits;
 }
 
@@ -133,12 +137,13 @@ static int parse_seq(const char *s, int n, uint32_t *cp, int *mods)
     }
 
     if (n >= 2 && (s[1] == '[' || s[1] == 'O')) {                 /* CSI */
-        int num = 1, mod = 1;
+        int num = 0, mod = 1;
         int i = 2;
         while (i < n && isdigit((unsigned char)s[i])) {
             num = num * 10 + (s[i] - '0');
             i++;
         }
+        if (num == 0) num = 1;               /* parameter absent → 1 */
         if (i < n && s[i] == ';') i++;
         if (i < n && isdigit((unsigned char)s[i])) {
             int j = i;
@@ -155,25 +160,54 @@ static int parse_seq(const char *s, int n, uint32_t *cp, int *mods)
         case 'B': *mods |= mod_bits(mod); return (mod == 3) ? K_WRIGHT : K_DOWN;
         case 'C': *mods |= mod_bits(mod); return (mod == 3 || mod == 5) ? K_WRIGHT : K_RIGHT;
         case 'D': *mods |= mod_bits(mod); return (mod == 3 || mod == 5) ? K_WLEFT : K_LEFT;
+        case 'P': case 'Q': case 'R': case 'S':   /* F1-F4 (CSI or SS3) */
+            *mods |= mod_bits(mod);
+            return K_F1 + (fin - 'P');
         case 'H': return K_HOME;
         case 'F': return K_END;
         case 'M': return K_ENTER;
-        case '~':
+        case '~': {
+            *mods |= mod_bits(mod);
             switch (num) {
             case 1: case 7: return K_HOME;
             case 4: case 8: return K_END;
             case 3: return K_FDEL;
             case 5: return K_PGUP;
             case 6: return K_PGDN;
+            case 11:  return K_F1;
+            case 12:  return K_F2;
+            case 13:  return K_F3;
+            case 14:  return K_F4;
+            case 15:  return K_F5;
+            case 17:  return K_F6;
+            case 18:  return K_F7;
+            case 19:  return K_F8;
+            case 20:  return K_F9;
+            case 21:  return K_F10;
+            case 23:  return K_F11;
+            case 24:  return K_F12;
+            case 25:  return K_F13;
+            case 26:  return K_F14;
+            case 28:  return K_F15;
+            case 29:  return K_F16;
+            case 31:  return K_F17;
+            case 32:  return K_F18;
+            case 33:  return K_F19;
+            case 34:  return K_F20;
+            case 42:  return K_F21;
+            case 43:  return K_F22;
+            case 44:  return K_F23;
+            case 45:  return K_F24;
             }
             break;
+        }
         }
     }
     *cp = (unsigned char)s[n - 1];
     return K_NONE;
 }
 
-static int read_key(uint32_t *cp, int *mods)
+int ed_read_key(uint32_t *cp, int *mods)
 {
     *mods = 0;
     int c = read_byte();
@@ -222,6 +256,90 @@ static int read_key(uint32_t *cp, int *mods)
     }
     *cp = (uint32_t)(unsigned char)c;
     return K_NONE;
+}
+
+/* ── Tiny prompt line editor ─────────────────────────────────────────
+ * Used by the preset/config prompts and bind ask() prompts. Reads one
+ * line in raw mode (temporarily entering it if the caller is in cooked
+ * mode). ESC, Ctrl+C, or Ctrl+D cancels: returns -1 with an empty buf.
+ * Enter submits: returns 0. Arrows and other escape sequences are
+ * consumed and ignored; backspace and Ctrl+U edit the text. */
+int prompt_line(char *buf, size_t sz, const char *prompt)
+{
+    buf[0] = 0;
+    int was_raw = term_raw_active();
+
+    if (term_enter_raw() < 0) {
+        /* not interactive — plain fgets fallback */
+        if (prompt) { out(prompt); fflush(stdout); }
+        if (!fgets(buf, (int)sz, stdin)) { buf[0] = 0; return -1; }
+        size_t n = strlen(buf);
+        while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = 0;
+        return buf[0] ? 0 : -1;
+    }
+
+    if (prompt) { out(prompt); fflush(stdout); }
+    size_t len = 0;
+    int r = -1;
+
+    for (;;) {
+        uint32_t cp = 0;
+        int mods = 0;
+        int key = ed_read_key(&cp, &mods);
+        if (key == K_EOF) break;
+
+        if (key == K_NONE && cp < 0x20) {
+            switch (cp) {
+            case 0x0d: case 0x0a:                       /* Enter */
+                r = 0;
+                goto done;
+            case 0x1b:                                  /* ESC: cancel */
+            case 0x03: case 0x04:                       /* ^C / ^D */
+                goto done;
+            case 0x08:                                  /* ^H backspace */
+                if (len > 0) {
+                    len--;
+                    buf[len] = 0;
+                    out("\b \b");
+                }
+                continue;
+            case 0x15:                                  /* ^U: clear */
+                while (len > 0) { len--; buf[len] = 0; out("\b \b"); }
+                continue;
+            default:
+                continue;
+            }
+        }
+
+        if (key == K_NONE && mods == 0) {
+            if (cp == 0x7f) {                           /* DEL = backspace */
+                if (len > 0) {
+                    len--;
+                    buf[len] = 0;
+                    out("\b \b");
+                }
+                continue;
+            }
+            if (cp >= 0x20) {
+                if (len + 4 < sz) {
+                    char tmp[8];
+                    int l = utf8_encode(cp, tmp);
+                    memcpy(buf + len, tmp, (size_t)l);
+                    len += (size_t)l;
+                    buf[len] = 0;
+                    outn(tmp, (size_t)l);
+                }
+                continue;
+            }
+            continue;
+        }
+        /* mods set or named key (arrows etc.): consume and ignore */
+    }
+
+done:
+    out("\r\n");
+    if (!was_raw) term_exit_raw();
+    return r;
 }
 
 /* ── Candidates ───────────────────────────────────────────────────── */
@@ -587,22 +705,17 @@ static int bind_run(const Bind *b)
     case BIND_EXEC: {
         char cmd[BIND_CMD_MAX * 2 + 8];
         if (b->ask[0]) {
-            term_exit_raw();
-            out("\r\n");
-            outf("%s : ", b->ask);
-            fflush(stdout);
+            out("\r\n");                          /* leave the typing line */
+            char pbuf[BIND_ASK_MAX + 4];
+            snprintf(pbuf, sizeof pbuf, "%s : ", b->ask);
             char input[BIND_CMD_MAX];
-            input[0] = 0;
-            if (fgets(input, sizeof input, stdin)) {
-                size_t nl = strlen(input);
-                while (nl && (input[nl - 1] == '\n' || input[nl - 1] == '\r'))
-                    input[--nl] = 0;
+            if (prompt_line(input, sizeof input, pbuf) == 0) {
+                snprintf(cmd, sizeof cmd, "%s %s", b->cmd, input);
+                exec_line(cmd);
             }
-            snprintf(cmd, sizeof cmd, "%s %s", b->cmd, input);
-            term_enter_raw();
-        } else {
-            snprintf(cmd, sizeof cmd, "%s", b->cmd);
+            return 0;
         }
+        snprintf(cmd, sizeof cmd, "%s", b->cmd);
         out("\r\n");
         exec_line(cmd);
         return 0;
@@ -640,7 +753,7 @@ char *edit_line(const char *prompt_txt, int *cancelled)
 
         uint32_t cp = 0;
         int mods = 0;
-        int key = read_key(&cp, &mods);
+        int key = ed_read_key(&cp, &mods);
         int control = (key == K_NONE && cp < 0x20);
 
         /* user bindings intercept before the default key actions */

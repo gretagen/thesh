@@ -106,7 +106,6 @@ int main(int argc, char **argv)
     config_init();
     dict_refresh(getenv("PATH"));
     hist_setup();
-    hist_load();
     atexit(thesh_on_exit);
 
     /* The C library spawns subprocesses as `sh -c -- command_string`, a
@@ -116,11 +115,13 @@ int main(int argc, char **argv)
     if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
         int ai = 2;
         if (argc >= 4 && strcmp(argv[2], "--") == 0) ai = 3;
+        hist_load();
         int st = exec_line(argv[ai]);
         hist_save();
         return st;
     }
     if (argc == 2) {
+        hist_load();
         int st = run_file(argv[1]);
         hist_save();
         return st >= 0 ? st : 1;
@@ -146,6 +147,10 @@ int main(int argc, char **argv)
             snprintf(rc, sizeof rc, "%s/.therc", home);   /* legacy */
         rc_watch_add(rc);   /* added even if absent — creation is detected */
     }
+
+    /* Load history after the rc files so `history`/`historylimit` from the
+     * config already apply (limit trims, disabled means nothing loads). */
+    hist_load();
 
     for (;;) {
         maybe_reload_config();

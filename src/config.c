@@ -58,6 +58,8 @@ void config_init(void)
     Cfg.guesser      = 1;      /* ghost suggestions          */
     Cfg.corrector    = 0;      /* passive                    */
     Cfg.autoreload   = 1;      /* re-source rc files on edit */
+    Cfg.history_limit   = HIST_MAX;
+    Cfg.history_enabled = 1;
     Cfg.col_rightwall = NULL;
     Cfg.col_leftwall  = NULL;
     Cfg.col_sep       = NULL;
@@ -169,6 +171,24 @@ int config_set_option(const char *key, const char *val)
         return 1;
     }
     if (!strcmp(key, "autoreload")) { Cfg.autoreload = str_bool(val); return 1; }
+    if (!strcmp(key, "history")) {
+        Cfg.history_enabled = str_bool(val);
+        if (!Cfg.history_enabled) hist_clear();   /* drop in-memory history */
+        return 1;
+    }
+    if (!strcmp(key, "historylimit")) {
+        long n = 0;
+        if (val && *val) {
+            char *end = NULL;
+            n = strtol(val, &end, 10);
+            if (end == val) n = Cfg.history_limit;   /* unparsable: keep */
+        }
+        if (n < 0) n = 0;
+        if (n > 1000000) n = 1000000;
+        Cfg.history_limit = (int)n;
+        hist_set_limit((int)n);
+        return 1;
+    }
     return 0;
 }
 
@@ -182,6 +202,7 @@ static const char *known_keys[] = {
     "hostname-opacity", "user-opacity", "path-opacity", "cursor-opacity",
     "guesser-opacity",
     "typing", "guesser", "corrector", "autoreload",
+    "history", "historylimit",
 };
 
 static int config_is_key(const char *key)
@@ -459,6 +480,8 @@ void config_dump_current(FILE *f)
     fprintf(f, "corrector = '%s'\n",
             (Cfg.corrector >= 0 && Cfg.corrector < 4) ? cor[Cfg.corrector] : "passive");
     fprintf(f, "autoreload = '%s'\n", Cfg.autoreload ? "yes" : "no");
+    fprintf(f, "history = '%s'\n", Cfg.history_enabled ? "yes" : "no");
+    fprintf(f, "historylimit = '%d'\n", Cfg.history_limit);
 }
 
 /* ── $PS1 expansion (bash-style subset) ───────────────────────────── */

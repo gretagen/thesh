@@ -61,6 +61,7 @@ typedef struct {
     int    max;
     char  *path;
     int    dirty;
+    int    loaded;
 } History;
 
 extern History H;
@@ -70,6 +71,7 @@ void    hist_load(void);
 void    hist_add(const char *line);
 void    hist_save(void);
 void    hist_clear(void);
+void    hist_set_limit(int n);
 int     hist_find(const char *needle, int start, int backward);
 int     hist_find_substr(const char *sub, int start, int backward);
 
@@ -101,9 +103,13 @@ enum {
     K_CTL_A, K_CTL_E, K_CTL_B, K_CTL_F,
     K_CTL_K, K_CTL_U, K_CTL_W, K_CTL_L, K_CTL_R,
     K_CTL_C, K_CTL_D,
+    K_F1, K_F2, K_F3, K_F4, K_F5, K_F6, K_F7, K_F8,
+    K_F9, K_F10, K_F11, K_F12, K_F13, K_F14, K_F15, K_F16,
+    K_F17, K_F18, K_F19, K_F20, K_F21, K_F22, K_F23, K_F24,
 };
-#define MOD_CTRL 1
-#define MOD_ALT  2
+#define MOD_CTRL  1
+#define MOD_ALT   2
+#define MOD_SUPER 4
 
 /* ---- bind.c (user key bindings from the config) ---- */
 #define BIND_MAX 32
@@ -152,6 +158,8 @@ typedef struct {
     int    guesser;        /* 1 = ghost suggestions on                 */
     int    corrector;      /* 0 passive, 1 active, 2 consent, 3 inactive */
     int    autoreload;     /* 1 = re-source rc files when they change  */
+    int    history_limit;  /* max commands kept in history             */
+    int    history_enabled;/* 1 = record + save command history        */
 } Config;
 
 extern Config Cfg;
@@ -167,6 +175,8 @@ void     config_dump_current(FILE *f);
 
 /* ---- editor.c ---- */
 char   *edit_line(const char *prompt, int *cancelled);
+int     ed_read_key(uint32_t *cp, int *mods);
+int     prompt_line(char *buf, size_t sz, const char *prompt);
 
 /* ---- exec.c ---- */
 int     exec_line(const char *line);

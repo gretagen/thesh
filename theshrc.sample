@@ -75,9 +75,12 @@ guesser : 'yes'
 corrector : 'passive'
 
 # shortcuts (key bindings)
-# left side: CTRL/ALT joined with '+', then a key (letter or a name such
-#   as ENTER TAB UP DOWN LEFT RIGHT HOME END PGUP PGDN BACKSPACE DELETE ESC)
-# actions: exec('cmd') run a command; ask(label) appends prompt input to it;
+# left side: modifiers CTRL/ALT/SUPER (WIN/WINDOWS/META also work) joined
+#   with '+', plus a key: a letter/digit/symbol, or a name such as
+#   ENTER TAB UP DOWN LEFT RIGHT HOME END PGUP PGDN BACKSPACE DELETE ESC,
+#   or F1..F24. A modifier is optional: F11 = ... binds the plain key.
+# actions: exec('cmd') run a command; ask(label) appends prompt input to it
+#   (prompts cancelled with ESC/Ctrl+C/Ctrl+D);
 #          copy / paste the line clipboard; close exits the shell.
 
 ALT + T = exec('top')
@@ -93,6 +96,19 @@ ALT + M = "exec('micro') ask(path?)"
 
 # prompts for an action, then runs zeta <action>
 CTRL + Z = "exec('zeta')  ask(action?)"
+
+# Super (Windows) key + arrow, and plain function keys:
+# SUPER + UP = exec('echo super up')
+# F11        = exec('something')
+# ALT + F5   = exec('reload')
+
+# history
+#   history      : 'yes' records new commands and saves them on exit;
+#                  'no' stops recording (the saved file is left alone)
+#   historylimit : keep only the last N commands (any value; default 500)
+
+history : 'yes'
+historylimit : '30'
 
 # presets
 #   presets          : list presets and apply one (the shell asks whether
