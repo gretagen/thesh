@@ -340,6 +340,7 @@ static void hist_reset(void)
 static void compute_suggest(void)
 {
     gh.len = 0;
+    if (!Cfg.guesser) return;
     if (e.cur != e.len) return;
 
     char *text = btext(&e);
@@ -382,9 +383,17 @@ static void ed_draw(void)
     bdump(&e, 0, e.cur);
     bdump(&e, e.cur, e.len);
     if (gh.len) {
-        out("\033[2m");
-        bdump(&gh, 0, gh.len);
-        out("\033[22m");
+        if (Cfg.col_guess) {
+            char wrap[16];
+            snprintf(wrap, sizeof wrap, "\033[%sm", Cfg.col_guess);
+            out(wrap);
+            bdump(&gh, 0, gh.len);
+            out("\033[0m");
+        } else {
+            out("\033[2m");
+            bdump(&gh, 0, gh.len);
+            out("\033[22m");
+        }
     }
     out("\033[K");
     int back = bcells(&e, e.cur, e.len) + bcells(&gh, 0, gh.len);

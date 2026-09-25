@@ -1,9 +1,55 @@
 # theshrc - Thesh shell configuration (Haliade OS)
-# Loaded at startup for every user via /etc/theshrc.
+# Loaded at startup for every user via /etc/theshrc
+# Loaded for user at ~/.theshrc
+
+# Aliases
 
 alias ll='ls -l'
 alias la='ls -la'
 alias h='history'
 alias cls='clear'
+
+# Styling
+
+looks = "$RIGHTWALL $SPACER $USER $SPACER $SEPERATOR $SPACER $HOSTNAME $SPACER $LEFTWALL $SPACER $PATH $SPACER $CURSOR"
+
+rightwallstyle : '['
+leftwallstyle : ']'
+seperatorstyle : '|'
+
+# cursorstyle : any symbol can be the cursor; '' for none
+cursorstyle : '$'
+
+# colors
+# presets: black red green yellow blue purple cyan white grey pink,
+#          bright-<color>, default, none
+
+rightwall-color = 'white'
+leftwall-color = 'white'
+seperator-color = 'white'
+hostname-color = 'white'
+path-color = 'grey'
+cursor-color = 'white'
+guesser-color = 'grey'
+
+# typing
+# hybrid    : allows lowercase and uppercase (default)
+# lowercase : lowercase only
+
+typing : 'hybrid'
+
+# guesser
+# guesses the command you're typing from history
+# yes / no (default yes)
+
+guesser : 'yes'
+
+# corrector
+# active   : immediately corrects the command
+# passive  : tells you "no such command, did you mean 'cmd'?" (default)
+# consent  : asks before correcting
+# inactive : disables correction
+
+corrector : 'passive'
 
 echo "Welcome to thesh on Haliade OS."

@@ -29,12 +29,9 @@ int edit_distance(const char *a, const char *b)
     return r < 4096 ? (int)r : 4096;
 }
 
-void print_suggestion(const char *word)
+const char *best_suggestion(const char *word)
 {
-    if (!word || !*word) {
-        dprintf(STDERR_FILENO, "%s: no command given\n", THESH_NAME);
-        return;
-    }
+    if (!word || !*word) return NULL;
 
     int best_d = INT_MAX;
     const char *best = NULL;
@@ -55,6 +52,18 @@ void print_suggestion(const char *word)
     for (int i = 0; i < dict_count(); i++) TRY(dict_get(i));
 
 #undef TRY
+
+    return best;
+}
+
+void print_suggestion(const char *word)
+{
+    if (!word || !*word) {
+        dprintf(STDERR_FILENO, "%s: no command given\n", THESH_NAME);
+        return;
+    }
+
+    const char *best = best_suggestion(word);
 
     if (best)
         dprintf(STDERR_FILENO,

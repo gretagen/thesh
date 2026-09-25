@@ -351,7 +351,7 @@ static int run_builtin(char **args, int argc)
 
     if (!strcmp(c, "type")) {
         for (int i = 1; i < argc; i++) {
-            case_fold_command(args[i]);
+            if (Cfg.hybrid) case_fold_command(args[i]);
             const char *a = alias_lookup(args[i]);
             if (a) outf("%s is aliased to `%s'\n", args[i], a);
             else if (is_builtin(args[i])) outf("%s is a shell builtin\n", args[i]);
@@ -480,6 +480,16 @@ static int collect_redirs(char **args, int argc, Redir *redr, int capr,
     *out = na;
     *outargc = n;
     return nr;
+}
+
+/* Replace the command word in situ.  `clean` and `argv` view the same
+ * token strings, so update both so later frees stay balanced and the
+ * old word is freed exactly once.  Takes ownership of `word`. */
+static void replace_cmd_word(char **clean, char **argv, char *word)
+{
+    free(*clean);
+    *clean = word;
+    *argv  = word;
 }
 
 static void free_redirs(Redir *redr, int n)
@@ -664,10 +674,10 @@ static void pipeline_child(const char *seg, int in_fd, int out_fd)
     int argc = 0;
     char **argv = tokenize(seg, &argc);
     if (!argc) _exit(0);
-    case_fold_command(argv[0]);
+    if (Cfg.hybrid) case_fold_command(argv[0]);
     argv = expand_aliases(argv, &argc);
     if (!argc) { free_argv(argv); _exit(0); }
-    case_fold_command(argv[0]);
+    if (Cfg.hybrid) case_fold_command(argv[0]);
 
     Redir redr[16];
     char **clean;
@@ -692,10 +702,22 @@ static void pipeline_child(const char *seg, int in_fd, int out_fd)
     }
     if (!dict_has(clean[0])) {
         dict_force_refresh(getenv("PATH"));
-        case_fold_command(clean[0]);
+        if (Cfg.hybrid) case_fold_command(clean[0]);
         if (!dict_has(clean[0])) {
-            print_suggestion(clean[0]);
-            _exit(127);
+            const char *best = (Cfg.corrector == 3) ? NULL
+                                                    : best_suggestion(clean[0]);
+            if (Cfg.corrector == 1 && best) {
+                char *fixed = xstrdup(best);
+                free(clean[0]);
+                clean[0] = fixed;              /* auto-correct, run below */
+            } else if (best) {
+                print_suggestion(clean[0]);    /* passive (consent too)   */
+                _exit(127);
+            } else {
+                dprintf(2, "%s: no such command: '%s'\n",
+                        THESH_NAME, clean[0]);
+                _exit(127);
+            }
         }
     }
     execvp(clean[0], clean);
@@ -760,10 +782,10 @@ static int exec_single(const char *seg)
     int argc;
     char **argv = tokenize(seg, &argc);
     if (!argc) { free_argv(argv); return 0; }
-    case_fold_command(argv[0]);
+    if (Cfg.hybrid) case_fold_command(argv[0]);
     argv = expand_aliases(argv, &argc);
     if (!argc) { free_argv(argv); return 0; }
-    case_fold_command(argv[0]);
+    if (Cfg.hybrid) case_fold_command(argv[0]);
 
     Redir redr[16];
     char **clean;
@@ -815,11 +837,42 @@ static int exec_single(const char *seg)
         free_redirs(redr, nredir);
     } else if (!dict_has(clean[0])) {
         dict_force_refresh(getenv("PATH"));
-        case_fold_command(clean[0]);
+        if (Cfg.hybrid) case_fold_command(clean[0]);
         if (!dict_has(clean[0])) {
-            print_suggestion(clean[0]);
-            st = 127;
-            shell_status = 127;
+            const char *best = (Cfg.corrector == 3) ? NULL
+                                                    : best_suggestion(clean[0]);
+            if (Cfg.corrector == 1 && best) {
+                char *fixed = xstrdup(best);
+                replace_cmd_word(clean, argv, fixed);   /* auto-correct */
+                run_child(clean, redr, nredir);
+                st = shell_status;
+            } else if (Cfg.corrector == 2 && best) {
+                dprintf(STDERR_FILENO,
+                        "%s: '%s' not found. Use '%s'? [y/N] ",
+                        THESH_NAME, clean[0], best);
+                fflush(stderr);
+                char ans[16];
+                if (fgets(ans, sizeof ans, stdin) &&
+                    (ans[0] == 'y' || ans[0] == 'Y')) {
+                    char *fixed = xstrdup(best);
+                    replace_cmd_word(clean, argv, fixed);
+                    run_child(clean, redr, nredir);
+                    st = shell_status;
+                } else {
+                    dprintf(STDERR_FILENO, "\n");
+                    st = 127;
+                    shell_status = 127;
+                }
+            } else if (best) {
+                print_suggestion(clean[0]);
+                st = 127;
+                shell_status = 127;
+            } else {
+                dprintf(2, "%s: no such command: '%s'\n",
+                        THESH_NAME, clean[0]);
+                st = 127;
+                shell_status = 127;
+            }
         } else {
             run_child(clean, redr, nredir);
             st = shell_status;
@@ -925,6 +978,9 @@ static int reap_bg(void)
 
 int exec_line(const char *line)
 {
+    /* Config directives (rc files or typed live) are consumed here. */
+    if (config_apply_line(line)) return 0;
+
     char **units;
     int *ops;
     int n = split_ops(line, &units, &ops);

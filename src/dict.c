@@ -111,7 +111,7 @@ int file_matches(const char *dir, const char *stem, const char ***out, int *cap)
     }
     closedir(d);
 
-    qsort(v, (size_t)n, sizeof(char *), name_cmp);
+    if (n > 1) qsort(v, (size_t)n, sizeof(char *), name_cmp);
     *out = (const char **)v;
     *cap = c;
     return n;

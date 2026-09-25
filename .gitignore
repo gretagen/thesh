@@ -1,3 +1,4 @@
-*.o
-thesh
+build/
 haliade-root/
+src/*.o
+/thesh

@@ -28,10 +28,14 @@ char *build_prompt(void)
         }
     }
 
-    char *out = xmalloc((size_t)(PATH_MAX + 256));
-    snprintf(out, (size_t)(PATH_MAX + 256),
-             "[ %s | %s ] %s $ ", user, host, dir);
-    return out;
+    if (Cfg.looks && Cfg.looks[0])
+        return render_looks_str(Cfg.looks, user, host, dir);
+
+    const char *ps1 = getenv("PS1");
+    if (ps1 && ps1[0])
+        return render_ps1(ps1, user, host, dir);
+
+    return render_looks_str(config_default_looks(), user, host, dir);
 }
 
 int main(int argc, char **argv)
@@ -41,6 +45,7 @@ int main(int argc, char **argv)
     signal(SIGQUIT, SIG_IGN);      /* children get defaults in run_child(). */
 
     shell_status = 0;
+    config_init();
     dict_refresh(getenv("PATH"));
     hist_setup();
     hist_load();
@@ -67,7 +72,9 @@ int main(int argc, char **argv)
     const char *home = getenv("HOME");
     if (home && *home) {
         char rc[PATH_MAX];
-        snprintf(rc, sizeof rc, "%s/.therc", home);
+        snprintf(rc, sizeof rc, "%s/.theshrc", home);
+        if (access(rc, R_OK) != 0)
+            snprintf(rc, sizeof rc, "%s/.therc", home);   /* legacy */
         run_file(rc);
     }
 

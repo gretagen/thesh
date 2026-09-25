@@ -25,7 +25,7 @@
 #include <pwd.h>
 
 #define THESH_NAME    "thesh"
-#define THESH_VERSION "0.2.5"
+#define THESH_VERSION "0.3.0"
 #define HIST_NAME     ".thesh_history"
 #define HIST_MAX      500
 #define ALIAS_MAX     128
@@ -83,7 +83,36 @@ int         file_matches(const char *dir, const char *stem,
 
 /* ---- spell.c ---- */
 int     edit_distance(const char *a, const char *b);
+const char *best_suggestion(const char *word);
 void    print_suggestion(const char *word);
+
+/* ---- config.c ---- */
+typedef struct {
+    char  *looks;          /* prompt template; NULL → PS1/default      */
+    char  *rightwall;      /* styles                                   */
+    char  *leftwall;
+    char  *sep;
+    char  *cursor;         /* cursorstyle symbol                       */
+    char  *col_rightwall;  /* SGR codes, NULL = no color               */
+    char  *col_leftwall;
+    char  *col_sep;
+    char  *col_host;
+    char  *col_path;
+    char  *col_cursor;
+    char  *col_guess;      /* ghost suggestion color                   */
+    int    hybrid;         /* typing: 1 = hybrid (case-insensitive)    */
+    int    guesser;        /* 1 = ghost suggestions on                 */
+    int    corrector;      /* 0 passive, 1 active, 2 consent, 3 inactive */
+} Config;
+
+extern Config Cfg;
+void     config_init(void);
+int      config_apply_line(const char *line);
+const char *config_default_looks(void);
+char    *render_looks_str(const char *tpl, const char *user,
+                          const char *host, const char *dir);
+char    *render_ps1(const char *ps1, const char *user,
+                    const char *host, const char *dir);
 
 /* ---- editor.c ---- */
 char   *edit_line(const char *prompt, int *cancelled);
