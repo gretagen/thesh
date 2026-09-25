@@ -1,5 +1,63 @@
 #include "thesh.h"
 
+/* ── rc file auto-reload ────────────────────────────────────────────────
+ * The interactive shell re-sources /etc/theshrc and the user rc whenever
+ * the on-disk file changes (mtime/size), so config edits take effect on
+ * the next prompt without restarting the shell.  Gated by Cfg.autoreload. */
+typedef struct {
+    char          path[PATH_MAX];
+    struct timespec mtime;
+    off_t         size;
+    int           exists;
+} RcWatch;
+
+static RcWatch rc_watch[4];
+static int     rc_watch_n = 0;
+
+static void rc_watch_add(const char *path)
+{
+    if (rc_watch_n >= (int)(sizeof rc_watch / sizeof rc_watch[0])) return;
+    RcWatch *w = &rc_watch[rc_watch_n++];
+    snprintf(w->path, sizeof w->path, "%s", path);
+    struct stat st;
+    if (stat(w->path, &st) == 0) {
+        w->mtime  = st.st_mtim;
+        w->size   = st.st_size;
+        w->exists = 1;
+    } else {
+        w->mtime.tv_sec = 0; w->mtime.tv_nsec = 0;
+        w->size = 0; w->exists = 0;
+    }
+}
+
+/* Resolve the user rc path with the same priority as startup:
+ * ~/.theshrc first, then the legacy ~/.therc. */
+static void maybe_reload_config(void)
+{
+    if (!Cfg.autoreload) return;
+
+    struct stat st;
+    for (int i = 0; i < rc_watch_n; i++) {
+        RcWatch *w = &rc_watch[i];
+        if (!w->path[0]) continue;
+        int ok = (stat(w->path, &st) == 0);
+        int changed = 0;
+        if (!ok) {
+            changed = w->exists;          /* file removed */
+            w->exists = 0;
+        } else {
+            changed = !w->exists ||
+                      st.st_mtim.tv_sec != w->mtime.tv_sec ||
+                      st.st_mtim.tv_nsec != w->mtime.tv_nsec ||
+                      st.st_size != w->size;
+            w->exists = 1;
+            w->mtime = st.st_mtim;
+            w->size  = st.st_size;
+        }
+        if (changed && ok) run_file_silent(w->path);
+    }
+}
+
 static void thesh_on_exit(void)
 {
     term_exit_raw();
@@ -78,7 +136,19 @@ int main(int argc, char **argv)
         run_file(rc);
     }
 
+    /* Watch the rc files we just loaded so edits reload on the next prompt. */
+    rc_watch_n = 0;
+    rc_watch_add("/etc/theshrc");
+    if (home && *home) {
+        char rc[PATH_MAX];
+        snprintf(rc, sizeof rc, "%s/.theshrc", home);
+        if (access(rc, R_OK) != 0)
+            snprintf(rc, sizeof rc, "%s/.therc", home);   /* legacy */
+        rc_watch_add(rc);   /* added even if absent — creation is detected */
+    }
+
     for (;;) {
+        maybe_reload_config();
         char *prompt = build_prompt();
         int cancelled = 0;
         char *line = edit_line(prompt, &cancelled);

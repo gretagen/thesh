@@ -1040,3 +1040,17 @@ int run_file(const char *path)
     fclose(f);
     return shell_status;
 }
+
+/* Re-source an rc file without emitting its stdout — used by the
+ * auto-reload watcher so editing ~/.theshrc doesn't replay rc echo
+ * lines into the terminal. Stderr (config warnings) still shows. */
+int run_file_silent(const char *path)
+{
+    int saved = dup(STDOUT_FILENO);
+    int devnull = open("/dev/null", O_WRONLY);
+    if (saved >= 0 && devnull >= 0) dup2(devnull, STDOUT_FILENO);
+    int rc = run_file(path);
+    if (devnull >= 0) close(devnull);
+    if (saved >= 0) { dup2(saved, STDOUT_FILENO); close(saved); }
+    return rc;
+}

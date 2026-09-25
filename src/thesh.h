@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <wchar.h>
 #include <locale.h>
@@ -25,7 +26,7 @@
 #include <pwd.h>
 
 #define THESH_NAME    "thesh"
-#define THESH_VERSION "0.3.0"
+#define THESH_VERSION "0.3.1"
 #define HIST_NAME     ".thesh_history"
 #define HIST_MAX      500
 #define ALIAS_MAX     128
@@ -103,6 +104,7 @@ typedef struct {
     int    hybrid;         /* typing: 1 = hybrid (case-insensitive)    */
     int    guesser;        /* 1 = ghost suggestions on                 */
     int    corrector;      /* 0 passive, 1 active, 2 consent, 3 inactive */
+    int    autoreload;     /* 1 = re-source rc files when they change  */
 } Config;
 
 extern Config Cfg;
@@ -120,6 +122,7 @@ char   *edit_line(const char *prompt, int *cancelled);
 /* ---- exec.c ---- */
 int     exec_line(const char *line);
 int     run_file(const char *path);
+int     run_file_silent(const char *path);
 int     is_builtin(const char *name);
 const char *alias_lookup(const char *name);
 void    alias_set(const char *name, const char *value);

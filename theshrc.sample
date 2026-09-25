@@ -52,4 +52,10 @@ guesser : 'yes'
 
 corrector : 'passive'
 
+# autoreload
+# yes : re-source rc files automatically when they change on disk (default)
+# no  : only load config at startup (use `source ~/.theshrc` to reload)
+
+autoreload : 'yes'
+
 echo "Welcome to thesh on Haliade OS."

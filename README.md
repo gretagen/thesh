@@ -169,6 +169,26 @@ default) and `none` (no color). Example: `path-color = 'green'`.
 | `typing`   | `hybrid`   | `hybrid` folds command names case-insensitively; `lowercase` is case-sensitive |
 | `guesser`  | `yes`      | `yes`/`no` — ghost suggestions on or off                  |
 | `corrector`| `passive`  | `passive` prints "Did you mean …?"; `active` auto-runs the fix; `consent` prompts `[y/N]`; `inactive` suppresses suggestions |
+| `autoreload`| `yes`     | `yes`/`no` — re-source rc files automatically when they change on disk |
+
+### Auto-reload
+
+The interactive shell watches the rc files it loaded at startup (`/etc/theshrc`,
+then the user rc). When one of them changes on disk — mtime or size — the shell
+re-sources it quietly and the new settings take effect on the **next prompt**,
+with no restart needed:
+
+```sh
+# open a second terminal and edit ~/.theshrc
+cursorstyle = '%'      # ← saved from the editor
+
+# back in the shell, press Enter: the next prompt uses the new style
+```
+
+Config `echo` lines are suppressed during an auto-reload (only warnings on
+`stderr` show), so editing the file never replays rc output into the terminal.
+Running `source ~/.theshrc` by hand still prints normally. Set `autoreload = no`
+in an rc file to disable watching.
 
 ## Builtins
 

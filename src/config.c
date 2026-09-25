@@ -45,6 +45,7 @@ void config_init(void)
     Cfg.hybrid       = 1;      /* case-insensitive commands  */
     Cfg.guesser      = 1;      /* ghost suggestions          */
     Cfg.corrector    = 0;      /* passive                    */
+    Cfg.autoreload   = 1;      /* re-source rc files on edit */
     Cfg.col_rightwall = NULL;
     Cfg.col_leftwall  = NULL;
     Cfg.col_sep       = NULL;
@@ -116,6 +117,7 @@ int config_set_option(const char *key, const char *val)
         else Cfg.corrector = 0;                  /* passive */
         return 1;
     }
+    if (!strcmp(key, "autoreload")) { Cfg.autoreload = str_bool(val); return 1; }
     return 0;
 }
 
@@ -124,7 +126,7 @@ static const char *known_keys[] = {
     "looks", "rightwallstyle", "leftwallstyle", "seperatorstyle",
     "cursorstyle", "rightwall-color", "leftwall-color", "seperator-color",
     "hostname-color", "path-color", "cursor-color", "guesser-color",
-    "typing", "guesser", "corrector",
+    "typing", "guesser", "corrector", "autoreload",
 };
 
 static int config_is_key(const char *key)
