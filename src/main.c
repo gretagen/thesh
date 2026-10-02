@@ -120,6 +120,16 @@ int main(int argc, char **argv)
         hist_save();
         return st;
     }
+
+    /* Version flags for CLI probes (`neofetch`-style tools, fastfetch once
+     * it knows thesh): printed before any rc loading, like the -c path. */
+    if (argc == 2 && (!strcmp(argv[1], "--version") ||
+                      !strcmp(argv[1], "-v")      ||
+                      !strcmp(argv[1], "-V"))) {
+        printf("%s %s\n", THESH_NAME, THESH_VERSION);
+        return 0;
+    }
+
     if (argc == 2) {
         hist_load();
         int st = run_file(argv[1]);
