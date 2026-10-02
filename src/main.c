@@ -63,6 +63,68 @@ static void thesh_on_exit(void)
     term_exit_raw();
 }
 
+/* ── /etc/environment ───────────────────────────────────────────────────
+ * pam_env-style KEY=value lines, loaded before anything else so declared
+ * variables (declaration's `environment` section writes this file) reach
+ * every execution path — interactive, -c, and scripts — and so the rc files
+ * loaded below can still override them. Blank lines and # comments are
+ * skipped, one layer of matching quotes is stripped, and keys are validated
+ * before setenv so a malformed line can only be ignored, never injected.
+ * THESH_ENV_FILE overrides the path (test hook). */
+static void load_environment(void)
+{
+    const char *path = getenv("THESH_ENV_FILE");
+    if (!path || !*path) path = "/etc/environment";
+
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    char line[4096];
+    while (fgets(line, sizeof line, f)) {
+        /* Oversized line: drop it whole rather than misparse the tail. */
+        if (!strchr(line, '\n') && !feof(f)) {
+            int c;
+            while ((c = fgetc(f)) != EOF && c != '\n') { }
+            continue;
+        }
+
+        char *p = line;
+        while (isspace((unsigned char)*p)) p++;
+        if (*p == '\0' || *p == '#') continue;
+
+        char *eq = strchr(p, '=');
+        if (!eq || eq == p) continue;
+        char *val = eq + 1;
+
+        /* Trim trailing whitespace/newline from the value. */
+        size_t vlen = strlen(val);
+        while (vlen > 0 && isspace((unsigned char)val[vlen - 1]))
+            val[--vlen] = '\0';
+
+        /* Strip one layer of matching quotes. */
+        if (vlen >= 2 && ((val[0] == '"' && val[vlen - 1] == '"')
+                       || (val[0] == '\'' && val[vlen - 1] == '\''))) {
+            val[vlen - 1] = '\0';
+            val++;
+        }
+
+        /* KEY: ends at '=', trailing spaces trimmed, [A-Za-z_][A-Za-z0-9_]*. */
+        char *key = p;
+        while (eq > key && isspace((unsigned char)eq[-1])) eq--;
+        *eq = '\0';
+        if (*key == '\0') continue;
+        char ok = 1;
+        for (const char *k = key; *k; k++) {
+            unsigned char c = (unsigned char)*k;
+            if (!(isalpha(c) || c == '_' || (k > key && isdigit(c)))) { ok = 0; break; }
+        }
+        if (!ok) continue;
+
+        setenv(key, val, 1);
+    }
+    fclose(f);
+}
+
 char *build_prompt(void)
 {
     char user[64] = "?", host[128] = "?", dir[PATH_MAX];
@@ -104,6 +166,7 @@ int main(int argc, char **argv)
 
     shell_status = 0;
     config_init();
+    load_environment();
     dict_refresh(getenv("PATH"));
     hist_setup();
     atexit(thesh_on_exit);
