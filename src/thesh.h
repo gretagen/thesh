@@ -24,6 +24,7 @@
 #include <dirent.h>
 #include <limits.h>
 #include <pwd.h>
+#include <time.h>
 
 #define THESH_NAME    "thesh"
 #define THESH_VERSION "0.4.1"
@@ -167,6 +168,9 @@ typedef struct {
     int    history_limit;  /* max commands kept in history             */
     int    history_enabled;/* 1 = record + save command history        */
     int    animation;      /* typed-character animation (ANIM_*)       */
+    int    movespeed;      /* cells per left/right press               */
+    int    scrollspeed;    /* history entries per up/down press        */
+    int    amplify;        /* held-arrow step multiplier (hold-to-2×)  */
 } Config;
 
 extern Config Cfg;

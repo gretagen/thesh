@@ -61,6 +61,9 @@ void config_init(void)
     Cfg.history_limit   = HIST_MAX;
     Cfg.history_enabled = 1;
     Cfg.animation       = ANIM_NONE;
+    Cfg.movespeed       = 1;
+    Cfg.scrollspeed     = 1;
+    Cfg.amplify         = 2;
     Cfg.col_rightwall = NULL;
     Cfg.col_leftwall  = NULL;
     Cfg.col_sep       = NULL;
@@ -199,6 +202,28 @@ int config_set_option(const char *key, const char *val)
         else Cfg.animation = ANIM_NONE;
         return 1;
     }
+    if (!strcmp(key, "movespeed")   || !strcmp(key, "scrollspeed") ||
+        !strcmp(key, "amplify")) {
+        int ok = 0;                          /* unparsable → keep current */
+        long n = 0;
+        if (val && *val) {
+            if      (!strcasecmp(val, "yes")) { n = 2; ok = 1; }
+            else if (!strcasecmp(val, "no"))  { n = 1; ok = 1; }
+            else {
+                char *end = NULL;
+                n = strtol(val, &end, 10);
+                if (end != val) ok = 1;
+            }
+        }
+        if (ok) {
+            if (n < 1)   n = 1;
+            if (n > 100) n = 100;
+            if      (!strcmp(key, "movespeed"))   Cfg.movespeed   = (int)n;
+            else if (!strcmp(key, "scrollspeed")) Cfg.scrollspeed = (int)n;
+            else                                  Cfg.amplify     = (int)n;
+        }
+        return 1;
+    }
     return 0;
 }
 
@@ -213,6 +238,7 @@ static const char *known_keys[] = {
     "guesser-opacity",
     "typing", "guesser", "corrector", "autoreload",
     "history", "historylimit", "animation",
+    "movespeed", "scrollspeed", "amplify",
 };
 
 static int config_is_key(const char *key)
@@ -496,6 +522,9 @@ void config_dump_current(FILE *f)
     static const char *anims[] = { "none", "matrix", "newcomer", "placement", "spinner" };
     fprintf(f, "animation = '%s'\n",
             Cfg.animation < 0 || Cfg.animation > 4 ? "none" : anims[Cfg.animation]);
+    fprintf(f, "movespeed = '%d'\n", Cfg.movespeed);
+    fprintf(f, "scrollspeed = '%d'\n", Cfg.scrollspeed);
+    fprintf(f, "amplify = '%d'\n", Cfg.amplify);
 }
 
 /* ── $PS1 expansion (bash-style subset) ───────────────────────────── */

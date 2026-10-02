@@ -207,6 +207,28 @@ static int parse_seq(const char *s, int n, uint32_t *cp, int *mods)
     return K_NONE;
 }
 
+/* A CSI (ESC [ …) sequence is complete once a final byte in 0x40..0x7E
+ * (A-D, H/F, ~, …) lands; SS3 (ESC O x) at 3 bytes; Alt+X at 2 bytes.
+ * A bare ESC (n==1) or ESC ESC … keeps waiting — that's what the caller's
+ * 50 ms poll resolves (ESC vs Alt+X). Returning the moment the sequence
+ * is complete is what keeps held-arrow repeats from being swallowed into
+ * a single event and removes the fixed 50 ms tail every escape sequence
+ * used to pay before the cursor moved. */
+static int seq_complete(const char *s, int n)
+{
+    if (n < 2) return 0;
+    if (s[1] == '[') {
+        for (int i = 2; i < n; i++) {
+            unsigned char c = (unsigned char)s[i];
+            if (c >= 0x40 && c <= 0x7E) return 1;
+        }
+        return 0;
+    }
+    if (s[1] == 'O') return n >= 3;
+    if (s[1] == 27)  return 0;             /* ESC ESC … — keep reading */
+    return 1;                              /* Alt+X at 2 bytes         */
+}
+
 int ed_read_key(uint32_t *cp, int *mods)
 {
     *mods = 0;
@@ -217,11 +239,13 @@ int ed_read_key(uint32_t *cp, int *mods)
         char seq[16];
         int n = 0;
         seq[n++] = 27;
-        struct pollfd p = { STDIN_FILENO, POLLIN, 0 };
-        while (n < (int)sizeof seq - 1 && poll(&p, 1, 50) > 0) {
+        while (n < (int)sizeof seq - 1) {
+            struct pollfd p = { STDIN_FILENO, POLLIN, 0 };
+            if (poll(&p, 1, 50) <= 0) break;   /* bare ESC: silence decides */
             int b = read_byte();
             if (b < 0) break;
             seq[n++] = (char)b;
+            if (seq_complete(seq, n)) break;   /* one event per call */
         }
         return parse_seq(seq, n, cp, mods);
     }
@@ -843,6 +867,35 @@ static int bind_run(const Bind *b)
     return 0;
 }
 
+/* ── Movement speed & the hold-to-amplify boost ─────────────────────
+ * movespeed   = cells per Left/Right press
+ * scrollspeed = history entries per Up/Down press
+ * amplify     = while the SAME arrow is held (its previous press was
+ *               within AMPLIFY_HOLD_MS, i.e. auto-repeat is running),
+ *               each repeat advances step × amplify — "hold to double". */
+#define AMPLIFY_HOLD_MS 400
+
+static struct timespec last_arrow[4];        /* indexed by key - K_UP */
+
+static int arrow_step(int key)
+{
+    int idx = key - K_UP;                    /* K_UP K_DOWN K_LEFT K_RIGHT */
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    int base = (key == K_UP || key == K_DOWN) ? Cfg.scrollspeed : Cfg.movespeed;
+
+    long long dt_ms = -1;                    /* -1 = first press of this key */
+    if (last_arrow[idx].tv_sec || last_arrow[idx].tv_nsec) {
+        dt_ms = (now.tv_sec  - last_arrow[idx].tv_sec)  * 1000LL +
+                (now.tv_nsec - last_arrow[idx].tv_nsec) / 1000000LL;
+    }
+    last_arrow[idx] = now;
+
+    if (dt_ms >= 0 && dt_ms <= AMPLIFY_HOLD_MS) base *= Cfg.amplify;
+    return base;
+}
+
 /* ── The main line editor ─────────────────────────────────────────── */
 char *edit_line(const char *prompt_txt, int *cancelled)
 {
@@ -864,6 +917,8 @@ char *edit_line(const char *prompt_txt, int *cancelled)
     rmatch = -1;
     rsearch_on = 0;
     free(rbase); rbase = NULL;
+    memset(last_arrow, 0, sizeof last_arrow);  /* first press of a new line
+                                                  is always base speed      */
 
     for (;;) {
         compute_suggest();
@@ -951,8 +1006,16 @@ char *edit_line(const char *prompt_txt, int *cancelled)
             bdel(&e, e.cur);
             goto edited;
 
-        case K_LEFT:   if (e.cur > 0) e.cur--; break;
-        case K_RIGHT:  if (e.cur < e.len) e.cur++; break;
+        case K_LEFT: {
+            int step = arrow_step(K_LEFT);
+            while (step-- > 0 && e.cur > 0) e.cur--;
+            break;
+        }
+        case K_RIGHT: {
+            int step = arrow_step(K_RIGHT);
+            while (step-- > 0 && e.cur < e.len) e.cur++;
+            break;
+        }
         case K_HOME:   e.cur = 0; break;
         case K_END:    e.cur = e.len; break;
 
@@ -971,8 +1034,16 @@ char *edit_line(const char *prompt_txt, int *cancelled)
             break;
         }
 
-        case K_UP:    hist_up(); break;
-        case K_DOWN:  hist_down(); break;
+        case K_UP: {
+            int step = arrow_step(K_UP);
+            while (step-- > 0) hist_up();
+            break;
+        }
+        case K_DOWN: {
+            int step = arrow_step(K_DOWN);
+            while (step-- > 0) hist_down();
+            break;
+        }
 
         case K_CTL_K:
             while (e.cur < e.len) bdel(&e, e.cur);

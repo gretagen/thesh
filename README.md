@@ -216,6 +216,9 @@ guesser-opacity = '65%'
 | `history`  | `yes`      | `yes`/`no` — record new commands and save them on exit |
 | `historylimit` | `500`  | any number — max commands kept in history (oldest are trimmed; `0` disables) |
 | `animation` | `none`   | `none`/`matrix`/`newcomer`/`placement`/`spinner` — how typed characters appear (see below) |
+| `movespeed` | `1`      | letters the cursor advances per Left/Right press (`1..100`) |
+| `scrollspeed` | `1`    | history entries traversed per Up/Down press (`1..100`) |
+| `amplify`   | `2`      | hold-to-boost multiplier: while the same arrow is held (pressed again within 400 ms), each repeat advances `step × amplify`; `yes` = `2`, `no` = `1` |
 
 Typed-character animations are purely cosmetic and **never block input**: the
 letter is committed to the line the instant the key is pressed, so typing fast
@@ -232,6 +235,21 @@ while a frame is still on screen.
 
 ```sh
 animation = spinner
+```
+
+### Movement speed
+
+Cursor movement runs at your terminal's key-repeat rate — every press of an
+arrow counts, one for one. `movespeed` and `scrollspeed` set the base step
+per press (letters for Left/Right, history entries for Up/Down), and
+`amplify` adds a hold-to-boost: keep the same arrow held and each repeat
+advances `step × amplify`, so holding Right sweeps at double speed while a
+single tap stays precise.
+
+```sh
+movespeed = 1      # letters per left/right press
+scrollspeed = 1    # history entries per up/down press
+amplify = 2        # held arrows advance twice as fast (no = off)
 ```
 
 ### Key bindings

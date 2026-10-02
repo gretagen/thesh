@@ -121,6 +121,17 @@ historylimit = '30'
 
 animation = matrix
 
+# movement & scrolling
+#   movespeed   = letters the cursor advances per left/right press (default 1)
+#   scrollspeed = history entries per up/down press (default 1)
+#   amplify     = hold an arrow key down and each repeat advances
+#                 step × amplify — 'yes' = ×2, 'no' (or 1) = off (default 2).
+#                 The first press is always the base speed.
+
+movespeed = '1'
+scrollspeed = '1'
+amplify = '2'
+
 # presets
 #   presets          : list presets and apply one (the shell asks whether
 #                      to make it the default for system/user/both, then
