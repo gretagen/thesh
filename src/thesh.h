@@ -27,7 +27,7 @@
 #include <time.h>
 
 #define THESH_NAME    "thesh"
-#define THESH_VERSION "0.4.1"
+#define THESH_VERSION "0.4.2"
 #define HIST_NAME     ".thesh_history"
 #define HIST_MAX      500
 #define ALIAS_MAX     128
