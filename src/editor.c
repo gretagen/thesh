@@ -103,14 +103,16 @@ static int read_byte(void)
 }
 
 /* Decode an xterm modifier number (2=shift, 3/4=alt, 5/6=ctrl,
- * 7/8=alt+ctrl, 9..16=meta, 33..40=super) into MOD_* bits.
- * Shift is deliberately ignored so SUPER+Shift+Up still hits a
- * `SUPER + UP` binding. */
+ * 7/8=alt+ctrl, 9..16=meta, 33..40=super) into MOD_* bits. Shift IS
+ * reported now so `SHIFT + LEFT` binds fire; bind_lookup() falls back to
+ * the unshifted bind when no SHIFT bind exists, so a `SUPER + UP` bind
+ * still catches Super+Shift+Up. */
 static int mod_bits(int mod)
 {
     if (mod <= 1) return 0;
     int m = mod - 1;
     int bits = 0;
+    if (m & 1) bits |= MOD_SHIFT;
     if (m & 2) bits |= MOD_ALT;
     if (m & 4) bits |= MOD_CTRL;
     if (m & 8) bits |= MOD_SUPER;    /* meta */
@@ -163,9 +165,12 @@ static int parse_seq(const char *s, int n, uint32_t *cp, int *mods)
         case 'P': case 'Q': case 'R': case 'S':   /* F1-F4 (CSI or SS3) */
             *mods |= mod_bits(mod);
             return K_F1 + (fin - 'P');
-        case 'H': return K_HOME;
-        case 'F': return K_END;
-        case 'M': return K_ENTER;
+        case 'H': *mods |= mod_bits(mod); return K_HOME;
+        case 'F': *mods |= mod_bits(mod); return K_END;
+        case 'M': *mods |= mod_bits(mod); return K_ENTER;
+        case 'Z':                               /* CSI Z = Shift+Tab */
+            *mods |= MOD_SHIFT | mod_bits(mod);
+            return K_TAB;
         case '~': {
             *mods |= mod_bits(mod);
             switch (num) {

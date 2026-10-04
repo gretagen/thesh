@@ -75,32 +75,39 @@ guesser = 'yes'
 corrector = 'passive'
 
 # shortcuts (key bindings)
-# left side: modifiers CTRL/ALT/SUPER (WIN/WINDOWS/META also work) joined
-#   with '+', plus a key: a letter/digit/symbol, or a name such as
-#   ENTER TAB UP DOWN LEFT RIGHT HOME END PGUP PGDN BACKSPACE DELETE ESC,
-#   or F1..F24. A modifier is optional: F11 = ... binds the plain key.
+# canonical form: bind = <combo> = <action>   (wm-style)
+# the bare form without `bind = ` still works: ALT + T = exec('top')
+# left side: modifiers CTRL/ALT/SUPER (WIN/WINDOWS/META also work) and
+#   SHIFT, joined with '+', plus a key: a letter/digit/symbol, or a name
+#   such as ENTER TAB UP DOWN LEFT RIGHT HOME END PGUP PGDN BACKSPACE
+#   DELETE ESC, or F1..F24. A modifier is optional: F11 = ... binds the
+#   plain key. SHIFT works for arrows, Home/End, PgUp/PgDn, F-keys and
+#   Tab — plain letters can't carry shift (terminals don't distinguish
+#   'A' from Shift+a), so `SHIFT + A` is rejected with a warning.
 # actions: exec('cmd') run a command; ask(label) appends prompt input to it
 #   (prompts cancelled with ESC/Ctrl+C/Ctrl+D);
 #          copy / paste the line clipboard; close exits the shell.
 
-ALT + T = exec('top')
+bind = ALT + T = exec('top')
 
-CTRL + ALT + V = paste
-CTRL + ALT + C = copy
-CTRL + C = close
+bind = CTRL + ALT + V = paste
+bind = CTRL + ALT + C = copy
+bind = CTRL + C = close
 
 # advanced bind: prompts for a path, then runs micro <path>
 # (note: CTRL+M is the same byte as the Enter key (CR), so it always
 #  submits the line and cannot be rebound — ALT+M keeps the mnemonic)
-ALT + M = "exec('micro') ask(path?)"
+bind = ALT + M = "exec('micro') ask(path?)"
 
 # prompts for an action, then runs zeta <action>
-CTRL + Z = "exec('zeta')  ask(action?)"
+bind = CTRL + Z = "exec('zeta')  ask(action?)"
 
-# Super (Windows) key + arrow, and plain function keys:
-# SUPER + UP = exec('echo super up')
-# F11        = exec('something')
-# ALT + F5   = exec('reload')
+# Super (Windows) key + arrow, plain function keys, shift combos:
+# bind = SUPER + UP  = exec('echo super up')
+# bind = F11         = exec('something')
+# bind = ALT + F5    = exec('reload')
+# bind = SHIFT + TAB = exec('echo other window')
+# bind = SHIFT + LEFT = exec('echo select mode')
 
 # history
 #   history      = 'yes' records new commands and saves them on exit;

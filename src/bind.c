@@ -1,14 +1,18 @@
 #include "thesh.h"
 
 /* ── User key bindings ──────────────────────────────────────────────
- * Config syntax:
- *     ALT  + T        = exec('top')
- *     CTRL + ALT + V  = paste
- *     CTRL + C        = close
- *     CTRL + M        = "exec('micro') ask(path?)"
- * Left side: one or more of CTRL/ALT/SUPER joined with `+`, ending in
- * a key (single letter/digit/symbol, or a name such as ENTER/TAB/UP/.../
- * F1..F24). SUPER also matches WIN/WINDOWS/META in config lines.
+ * Config syntax (wm-style prefix form — canonical):
+ *     bind = ALT  + T = exec('top')
+ *     bind = CTRL + ALT + V = paste
+ *     bind = SHIFT + LEFT = exec('select-mode')
+ *     bind = F11 = exec('something')
+ * The bare form (`ALT + T = exec('top')`) stays fully supported.
+ * Left side: one or more of CTRL/ALT/SUPER/SHIFT joined with `+`, ending
+ * in a key (single letter/digit/symbol, or a name such as ENTER/TAB/UP/
+ * .../F1..F24). SUPER also matches WIN/WINDOWS/META in config lines.
+ * SHIFT works for keys that carry an xterm modifier param (arrows,
+ * Home/End, PgUp/PgDn, F-keys) plus Tab (CSI Z); plain letters and
+ * Shift+Enter are indistinguishable from plain input in a terminal.
  * Right side: `close`, `copy`, `paste`, or `exec('cmd')` optionally
  * followed by `ask(label)` which prompts for one line appended to cmd. */
 
@@ -31,8 +35,9 @@ static char *svtrim(char *s)
 
 static int mod_from(const char *t)
 {
-    if (ieq(t, "CTRL")) return MOD_CTRL;
-    if (ieq(t, "ALT"))  return MOD_ALT;
+    if (ieq(t, "CTRL"))  return MOD_CTRL;
+    if (ieq(t, "ALT"))   return MOD_ALT;
+    if (ieq(t, "SHIFT")) return MOD_SHIFT;
     if (ieq(t, "SUPER") || ieq(t, "WIN") || ieq(t, "WINDOWS") ||
         ieq(t, "META")) return MOD_SUPER;
     return 0;
@@ -135,7 +140,29 @@ int bind_parse_line(const char *line)
     char *t = svtrim(buf);
     if (!*t || *t == '#') return 0;
 
-    /* First word must be a modifier (CTRL/ALT/SUPER/...) or a named key
+    /* wm-style prefix: `bind = ALT + C = action` (also `bind :` — the
+     * legacy separator is accepted like everywhere else in the config).
+     * The prefix is stripped here and the remainder runs through the
+     * exact same grammar as the bare form, which stays supported. */
+    if (strncasecmp(t, "bind", 4) == 0 &&
+        (t[4] == 0 || isspace((unsigned char)t[4]) ||
+         t[4] == '=' || t[4] == ':')) {
+        char *p = t + 4;
+        while (isspace((unsigned char)*p)) p++;
+        if (*p != '=' && *p != ':') {
+            dprintf(STDERR_FILENO, "%s: bind: expected '=' after 'bind'\n",
+                    THESH_NAME);
+            return 1;
+        }
+        t = svtrim(p + 1);
+        if (!*t) {
+            dprintf(STDERR_FILENO, "%s: bind: nothing to bind after 'bind = '\n",
+                    THESH_NAME);
+            return 1;
+        }
+    }
+
+    /* First word must be a modifier (CTRL/ALT/SUPER/SHIFT/...) or a named
      * so plain `F11 = ...` / `UP = ...` binds parse, while ordinary
      * command/config lines fall through. */
     {
@@ -167,7 +194,7 @@ int bind_parse_line(const char *line)
     for (int i = 0; i < nt - 1; i++) {
         int m = mod_from(toks[i]);
         if (!m) {
-            dprintf(STDERR_FILENO, "%s: bind: unknown modifier '%s' (use CTRL/ALT/SUPER)\n",
+            dprintf(STDERR_FILENO, "%s: bind: unknown modifier '%s' (use CTRL/ALT/SUPER/SHIFT)\n",
                     THESH_NAME, toks[i]);
             return 1;
         }
@@ -177,6 +204,16 @@ int bind_parse_line(const char *line)
     if (!key) {
         dprintf(STDERR_FILENO, "%s: bind: unknown key '%s'\n",
                 THESH_NAME, toks[nt - 1]);
+        return 1;
+    }
+
+    /* SHIFT + <single character> can never fire: the terminal sends a
+     * capital letter/symbol as a plain byte with no shift distinction.
+     * Reject it loudly instead of storing a dead binding. */
+    if ((mods & MOD_SHIFT) && ((key >= 32 && key <= 126) || key == 27)) {
+        dprintf(STDERR_FILENO, "%s: bind: SHIFT + plain keys never fire "
+                "(terminals send letters/symbols without a shift bit)\n",
+                THESH_NAME);
         return 1;
     }
 
@@ -233,6 +270,16 @@ const Bind *bind_lookup(int mods, int key)
     for (int i = 0; i < nbinds; i++)
         if (binds[i].mods == mods && binds[i].key == key)
             return &binds[i];
+    /* No exact match: if the press carried Shift, retry without it so a
+     * plain or SUPER/CTRL+… bind still catches the shifted press (that is
+     * how `SUPER + UP` keeps firing on Super+Shift+Up) while any explicit
+     * SHIFT + … bind always wins via the exact match above. */
+    if (mods & MOD_SHIFT) {
+        int base = mods & ~MOD_SHIFT;
+        for (int i = 0; i < nbinds; i++)
+            if (binds[i].mods == base && binds[i].key == key)
+                return &binds[i];
+    }
     return NULL;
 }
 
@@ -287,21 +334,20 @@ static void dump_bind_action(FILE *f, const Bind *b)
     }
 }
 
-/* Serialize every binding back into config syntax (used by savepreset). */
+/* Serialize every binding back into config syntax (used by savepreset).
+ * Canonical wm-style form: `bind = CTRL + SHIFT + LEFT = exec('…')`.
+ * A modifier-less bind emits `bind = F11 = …` (no stray separator). */
 void bind_dump(FILE *f)
 {
     for (int i = 0; i < nbinds; i++) {
         const Bind *b = &binds[i];
-        if (b->mods & MOD_CTRL) fputs("CTRL", f);
-        if (b->mods & MOD_ALT) {
-            if (b->mods & MOD_CTRL) fputs(" + ALT", f);
-            else                    fputs("ALT", f);
-        }
-        if (b->mods & MOD_SUPER) {
-            if (b->mods & (MOD_CTRL | MOD_ALT)) fputs(" + SUPER", f);
-            else                                fputs("SUPER", f);
-        }
-        fputs(" + ", f);
+        const char *sep = "";
+        fputs("bind = ", f);
+        if (b->mods & MOD_CTRL)  { fputs("CTRL", f);  sep = " + "; }
+        if (b->mods & MOD_ALT)   { fprintf(f, "%sALT", sep);   sep = " + "; }
+        if (b->mods & MOD_SUPER) { fprintf(f, "%sSUPER", sep); sep = " + "; }
+        if (b->mods & MOD_SHIFT) { fprintf(f, "%sSHIFT", sep); sep = " + "; }
+        fputs(sep, f);
         const char *nm = key_token_name(b->key);
         if (nm) {
             fputs(nm, f);

@@ -27,7 +27,7 @@
 #include <time.h>
 
 #define THESH_NAME    "thesh"
-#define THESH_VERSION "0.4.2"
+#define THESH_VERSION "0.4.3"
 #define HIST_NAME     ".thesh_history"
 #define HIST_MAX      500
 #define ALIAS_MAX     128
@@ -111,6 +111,7 @@ enum {
 #define MOD_CTRL  1
 #define MOD_ALT   2
 #define MOD_SUPER 4
+#define MOD_SHIFT 8
 
 /* ---- bind.c (user key bindings from the config) ---- */
 #define BIND_MAX 32

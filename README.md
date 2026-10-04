@@ -4,7 +4,7 @@ A lightweight, standalone POSIX shell for Haliade OS, written in C11/C23. No bas
 dependency — works with any system providing a C compiler and POSIX libc. Tiny
 single binary; no external libraries.
 
-Current version: **0.4.2**
+Current version: **0.4.3**
 
 ## Building
 
@@ -105,7 +105,7 @@ When `looks` isn't set, `$PS1` is expanded. Supported escapes:
 | `\u`   | user                             | `\w`   | cwd (`~` collapsed) |
 | `\h`   | hostname (short)                 | `\W`   | basename of cwd |
 | `\H`   | hostname (long)                  | `\$`   | `#` if root, else `$` |
-| `\s`   | shell name (`thesh`)             | `\v`   | version (`0.4.2`) |
+| `\s`   | shell name (`thesh`)             | `\v`   | version (`0.4.3`) |
 | `\t`   | time `HH:MM:SS`                  | `\A`   | time `HH:MM`    |
 | `\@`   | time `HH:MM AM/PM`               | `\d`   | date `Day Mon DD` |
 | `\n`   | newline                          | `\e`   | escape          |
@@ -254,19 +254,22 @@ amplify = 2        # held arrows advance twice as fast (no = off)
 
 ### Key bindings
 
-Shortcuts are defined in the config with `+`-joined modifiers and a key on the
-left, and an action on the right:
+Shortcuts are defined in the config with a `bind = ` prefix, `+`-joined
+modifiers and a key in the middle, and an action on the right. The bare form
+(without the prefix) is still accepted everywhere:
 
 ```sh
-ALT + T        = exec('top')              # run a command
-CTRL + ALT + V = paste                    # paste the line clipboard
-CTRL + ALT + C = copy                     # copy the current line (also OSC 52)
-CTRL + C       = close                    # exit the shell
-ALT + M        = "exec('micro') ask(path?)"
-CTRL + Z       = "exec('zeta')  ask(action?)"
-SUPER + UP     = exec('echo super pressed')   # Windows/Super key + arrow
-F11            = exec('toggle')               # plain function key, no modifier
-ALT + F5       = exec('reload')
+bind = ALT + T = exec('top')          # run a command
+bind = CTRL + ALT + V = paste         # paste the line clipboard
+bind = CTRL + ALT + C = copy          # copy the current line (also OSC 52)
+bind = CTRL + C = close               # exit the shell
+bind = ALT + M = "exec('micro') ask(path?)"
+bind = CTRL + Z = "exec('zeta')  ask(action?)"
+bind = SHIFT + LEFT = exec('select-mode')   # shift + arrow
+bind = SHIFT + TAB = exec('other-window')   # shift + tab (CSI Z)
+bind = SUPER + UP = exec('echo super pressed')  # Windows/Super key + arrow
+bind = F11 = exec('toggle')                # plain function key, no modifier
+bind = ALT + F5 = exec('reload')
 ```
 
 > **Enter is `CTRL + M` (and `CTRL + J`)** at the byte level, so those two
@@ -274,18 +277,25 @@ ALT + F5       = exec('reload')
 > fair game (including `CTRL + C`, if you really want to bind `close` to it).
 
 * **Modifiers** — `CTRL`, `ALT`, `SUPER` (the Windows/Super key; `WIN`,
-  `WINDOWS`, `META` are also accepted), joined with `+`. Keys are a single
-  letter, digit or symbol (case-insensitive), or a name: `ENTER TAB SPACE
-  BACKSPACE DELETE UP DOWN LEFT RIGHT HOME END PGUP PGDN ESC F1` through
-  `F24`. A modifier is optional — `F11 = …` binds the plain function key.
-  Terminals report Super/Meta combinations as CSI modifiers (9–16 or 33–40),
-  which the shell decodes to `SUPER`, so `SUPER + UP` works with the arrow
-  keys. Shift is folded into the matched modifier (`SUPER+Shift+UP` still
-  triggers a `SUPER + UP` binding).
+  `WINDOWS`, `META` are also accepted) and `SHIFT`, joined with `+`. Keys are
+  a single letter, digit or symbol (case-insensitive), or a name: `ENTER TAB
+  SPACE BACKSPACE DELETE UP DOWN LEFT RIGHT HOME END PGUP PGDN ESC F1` through
+  `F24`. A modifier is optional — `bind = F11 = …` binds the plain function
+  key. Terminals report Super/Meta combinations as CSI modifiers (9–16 or
+  33–40), which the shell decodes to `SUPER`, so `SUPER + UP` works with the
+  arrow keys.
+* **Shift** — `SHIFT + …` binds fire for any key the terminal reports with an
+  xterm modifier param: arrows, `HOME`/`END`, `PGUP`/`PGDN`, `F1`–`F24`, plus
+  Tab via `CSI Z` (`SHIFT + TAB`). Combos work too (`CTRL + SHIFT + LEFT`).
+  When no `SHIFT` bind exists for a key, the shifted press falls back to that
+  key's plain bind — so `SUPER + UP` still fires on Super+Shift+Up. What
+  *can't* carry a shift bind: plain letters/digits/symbols and `SHIFT + ENTER`
+  (terminals send a capital or Enter as a plain byte with no shift bit — the
+  shell warns and rejects `SHIFT + A` style lines).
 * **Actions**:
   * `exec('cmd')` — run `cmd` (useful for shortcuts to interactive tools).
   * `ask(label)` — after `exec(...)`: prompt `label : ` on its own line, then
-    append the typed text to the command. `ALT + M = "exec('micro') ask(path?)"`
+    append the typed text to the command. `bind = ALT + M = "exec('micro') ask(path?)"`
     prompts `path? : `, and answering `/etc/theshrc` runs `micro /etc/theshrc`.
     **ESC, Ctrl+C or Ctrl+D cancels the prompt** without running the command.
   * `copy` — copy the current line (shell clipboard + best-effort OSC 52 to the
