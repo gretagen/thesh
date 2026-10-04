@@ -136,7 +136,13 @@ static char **tokenize(const char *line, int *argc)
         if (started) {                                                     \
             if (n >= cap) { cap = cap ? cap * 2 : 8;                       \
                 args = xrealloc(args, sizeof(char *) * (size_t)cap); }     \
-            args[n++] = xstrdup(w.b);                                      \
+            /* terminate at w.len: an empty word ("", '', or a $VAR that   \
+             * expands to nothing) appended no chars, so w.b still holds   \
+             * the PREVIOUS token — strdup'ing it as-is turned `""` into   \
+             * a duplicate of the last argument. NULL-guard a first token  \
+             * that never allocated. */                                    \
+            if (w.b) w.b[w.len] = 0;                                       \
+            args[n++] = xstrdup(w.b ? w.b : "");                           \
         }                                                                  \
         w.len = 0; started = 0;                                            \
     } while (0)
