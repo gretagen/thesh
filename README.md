@@ -272,9 +272,16 @@ bind = F11 = exec('toggle')                # plain function key, no modifier
 bind = ALT + F5 = exec('reload')
 ```
 
-> **Enter is `CTRL + M` (and `CTRL + J`)** at the byte level, so those two
-> keys can't be rebound — the submit key always wins. Every other key is
-> fair game (including `CTRL + C`, if you really want to bind `close` to it).
+> **Shared bytes:** `CTRL + M` / `CTRL + J` *are* Enter (`0x0D` / `0x0A`)
+> and `CTRL + H` *is* Backspace (`0x08`) — no terminal can tell those
+> combos apart from the plain key (and terminals disagree on which byte
+> Backspace sends: `0x7f` directly, `^H` through tmux — thesh accepts
+> both). Binds for these bytes therefore fire **only when the line is
+> empty**, where Enter/Backspace do nothing anyway: while there's text on
+> the line, submit and delete always win. So `bind = CTRL + M =
+> exec('manual')` works from the idle prompt without ever eating your
+> Enter key. Every other key is fair game (including `CTRL + C`, if you
+> really want to bind `close` to it).
 
 * **Modifiers** — `CTRL`, `ALT`, `SUPER` (the Windows/Super key; `WIN`,
   `WINDOWS`, `META` are also accepted) and `SHIFT`, joined with `+`. Keys are

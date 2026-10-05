@@ -935,11 +935,16 @@ char *edit_line(const char *prompt_txt, int *cancelled)
         int key = ed_read_key(&cp, &mods);
         int control = (key == K_NONE && cp < 0x20);
 
-        /* user bindings intercept before the default key actions */
-        if (key == K_NONE && (cp == 0x0d || cp == 0x0a)) {
-            /* Enter bytes — these are CR/LF, never shadowed by a binding */
-        } else {
-            int bkey = key;                         /* named keys pass through */
+        /* User bindings intercept before the default key actions.
+         * Shared bytes: 0x0d/0x0a are Enter (Ctrl+M/Ctrl+J) and 0x08 is
+         * Backspace (Ctrl+H) — no terminal can tell the combos apart
+         * from the plain key. The real action must keep working while
+         * there is text on the line, so binds for these bytes fire ONLY
+         * on an empty line, where Enter/Backspace do nothing anyway. */
+        int shared_byte = (key == K_NONE &&
+                           (cp == 0x0d || cp == 0x0a || cp == 0x08));
+        if (!shared_byte || e.len == 0) {
+            int bkey = key;                     /* named keys pass through */
             if (key == K_NONE) {
                 if (cp > 0 && cp < 0x1b) bkey = (int)cp + 0x60;   /* ctrl letter */
                 else bkey = (int)cp;                                /* plain char */
@@ -970,7 +975,9 @@ char *edit_line(const char *prompt_txt, int *cancelled)
             default:   key = K_NONE; break;
             }
         }
-        if (key == K_NONE && cp == 0x7f) key = K_DEL;
+        /* DEL (0x7f) and BS (0x08) are both Backspace — terminals and
+         * tmux disagree on which byte the key sends, so accept either. */
+        if (key == K_NONE && (cp == 0x7f || cp == 0x08)) key = K_DEL;
 
         switch (key) {
         case K_ENTER:

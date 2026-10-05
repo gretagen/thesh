@@ -95,8 +95,9 @@ bind = CTRL + ALT + C = copy
 bind = CTRL + C = close
 
 # advanced bind: prompts for a path, then runs micro <path>
-# (note: CTRL+M is the same byte as the Enter key (CR), so it always
-#  submits the line and cannot be rebound — ALT+M keeps the mnemonic)
+# (note: CTRL+M shares its byte with Enter and CTRL+H with Backspace —
+#  their binds fire only on an EMPTY line, so Enter/Backspace always
+#  win while you type. ALT+M keeps the mnemonic.)
 bind = ALT + M = "exec('micro') ask(path?)"
 
 # prompts for an action, then runs zeta <action>
