@@ -64,6 +64,9 @@ void config_init(void)
     Cfg.movespeed       = 1;
     Cfg.scrollspeed     = 1;
     Cfg.amplify         = 2;
+    Cfg.multiplexer     = 1;
+    Cfg.mux_window_limit = 0;            /* 0 = unlimited ("inf") */
+    Cfg.mux_style       = 0;             /* crosshair (tmux-like) */
     Cfg.col_rightwall = NULL;
     Cfg.col_leftwall  = NULL;
     Cfg.col_sep       = NULL;
@@ -73,6 +76,8 @@ void config_init(void)
     Cfg.col_guess     = NULL;
     Cfg.col_user      = NULL;
     Cfg.textcolor     = NULL;
+    Cfg.col_mux_active   = NULL;
+    Cfg.col_mux_inactive = NULL;
     Cfg.op_rightwall  = -1;
     Cfg.op_leftwall   = -1;
     Cfg.op_sep        = -1;
@@ -152,6 +157,8 @@ int config_set_option(const char *key, const char *val)
     if (!strcmp(key, "cursor-color"))    { set_color(&Cfg.col_cursor, val); return 1; }
     if (!strcmp(key, "guesser-color"))   { set_color(&Cfg.col_guess, val); return 1; }
     if (!strcmp(key, "user-color"))      { set_color(&Cfg.col_user, val); return 1; }
+    if (!strcmp(key, "multiplexer-active-color"))   { set_color(&Cfg.col_mux_active, val); return 1; }
+    if (!strcmp(key, "multiplexer-inactive-color")) { set_color(&Cfg.col_mux_inactive, val); return 1; }
     if (!strcmp(key, "textcolor"))       { set_color(&Cfg.textcolor, val); return 1; }
     if (!strcmp(key, "rightwall-opacity")) { parse_opacity(val, &Cfg.op_rightwall); return 1; }
     if (!strcmp(key, "leftwall-opacity"))  { parse_opacity(val, &Cfg.op_leftwall); return 1; }
@@ -224,6 +231,37 @@ int config_set_option(const char *key, const char *val)
         }
         return 1;
     }
+    if (!strcmp(key, "multiplexer")) {
+        Cfg.multiplexer = str_bool(val);
+        if (!Cfg.multiplexer) mux_leave();  /* live disable: plain shell */
+        return 1;
+    }
+    if (!strcmp(key, "multiplexer-window-limit")) {
+        if (val && *val) {
+            if (!strcasecmp(val, "inf") || !strcasecmp(val, "infinite")) {
+                Cfg.mux_window_limit = 0;
+            } else {
+                char *end = NULL;
+                long n = strtol(val, &end, 10);
+                if (end != val) {
+                    if (n < 1) n = 1;
+                    if (n > MUX_MAX_PANES) n = MUX_MAX_PANES;
+                    Cfg.mux_window_limit = (int)n;
+                }
+            }
+        }
+        return 1;
+    }
+    if (!strcmp(key, "multiplexer-style")) {
+        if (!val || !*val || !strcasecmp(val, "crosshair")) {
+            Cfg.mux_style = 0;
+        } else {
+            dprintf(STDERR_FILENO,
+                    "%s: unknown multiplexer style: '%s' (using 'crosshair')\n",
+                    THESH_NAME, val);
+        }
+        return 1;
+    }
     return 0;
 }
 
@@ -239,6 +277,8 @@ static const char *known_keys[] = {
     "typing", "guesser", "corrector", "autoreload",
     "history", "historylimit", "animation",
     "movespeed", "scrollspeed", "amplify",
+    "multiplexer-active-color", "multiplexer-inactive-color",
+    "multiplexer", "multiplexer-window-limit", "multiplexer-style",
 };
 
 static int config_is_key(const char *key)
@@ -279,6 +319,9 @@ int config_apply_line(const char *line)
     if (!config_is_key(key)) return 0;
 
     size_t vlen = strlen(p);
+    /* trailing whitespace is not part of the value — `'inf' ` must parse
+     * as `inf`, not as a missing-close quote */
+    while (vlen > 0 && isspace((unsigned char)p[vlen - 1])) vlen--;
     char *val = xmalloc(vlen + 1);
     size_t vi = 0;
     if (vlen >= 2 && (*p == '"' || *p == '\'') && p[vlen - 1] == *p) {
@@ -477,6 +520,8 @@ void config_dump_current(FILE *f)
         { "cursor-color",    &Cfg.col_cursor },
         { "guesser-color",   &Cfg.col_guess },
         { "textcolor",       &Cfg.textcolor },
+        { "multiplexer-active-color",   &Cfg.col_mux_active },
+        { "multiplexer-inactive-color", &Cfg.col_mux_inactive },
     };
     struct { const char *key; int v; } ops[] = {
         { "rightwall-opacity", Cfg.op_rightwall },
@@ -525,6 +570,12 @@ void config_dump_current(FILE *f)
     fprintf(f, "movespeed = '%d'\n", Cfg.movespeed);
     fprintf(f, "scrollspeed = '%d'\n", Cfg.scrollspeed);
     fprintf(f, "amplify = '%d'\n", Cfg.amplify);
+    fprintf(f, "multiplexer = '%s'\n", Cfg.multiplexer ? "yes" : "no");
+    if (Cfg.mux_window_limit)
+        fprintf(f, "multiplexer-window-limit = '%d'\n", Cfg.mux_window_limit);
+    else
+        fprintf(f, "multiplexer-window-limit = 'inf'\n");
+    fprintf(f, "multiplexer-style = '%s'\n", "crosshair");
 }
 
 /* ── $PS1 expansion (bash-style subset) ───────────────────────────── */

@@ -4,7 +4,7 @@ A lightweight, standalone POSIX shell for Haliade OS, written in C11/C23. No bas
 dependency — works with any system providing a C compiler and POSIX libc. Tiny
 single binary; no external libraries.
 
-Current version: **0.4.4**
+Current version: **0.5.0**
 
 ## Building
 
@@ -32,12 +32,18 @@ Binaries:
 ## Installation
 
 ```sh
-make install                          # installs to ~/haliade-root/usr/bin/thesh
-DESTDIR=/ make install                # system-wide install
+make install                                   # -> ~/.local/bin/thesh
+sudo make install PREFIX=/usr                  # system-wide -> /usr/bin/thesh
+make install PREFIX=/usr DESTDIR=$HOME/haliade-root   # populate the Haliade rootfs
 ```
 
-`DESTDIR` defaults to `$HOME/haliade-root`. `make install` also copies
-`theshrc.sample` to `$DESTDIR/etc/theshrc` if one isn't already there.
+`PREFIX` defaults to `$HOME/.local` — make sure `$PREFIX/bin` is on your
+`$PATH`. `DESTDIR` is an empty staging prefix (for packaging). No config
+file is written; the shell reads `/etc/theshrc` then `~/.theshrc`:
+
+```sh
+cp theshrc.sample ~/.theshrc
+```
 
 ## Features
 
@@ -105,7 +111,7 @@ When `looks` isn't set, `$PS1` is expanded. Supported escapes:
 | `\u`   | user                             | `\w`   | cwd (`~` collapsed) |
 | `\h`   | hostname (short)                 | `\W`   | basename of cwd |
 | `\H`   | hostname (long)                  | `\$`   | `#` if root, else `$` |
-| `\s`   | shell name (`thesh`)             | `\v`   | version (`0.4.4`) |
+| `\s`   | shell name (`thesh`)             | `\v`   | version (`0.5.0`) |
 | `\t`   | time `HH:MM:SS`                  | `\A`   | time `HH:MM`    |
 | `\@`   | time `HH:MM AM/PM`               | `\d`   | date `Day Mon DD` |
 | `\n`   | newline                          | `\e`   | escape          |
@@ -159,6 +165,8 @@ looks = "$RIGHTWALL $SPACER $USER $SPACER $SEPERATOR $SPACER $HOSTNAME $SPACER $
 | `cursor-color`     | cursor glyph   |
 | `user-color`       | `$USER`        |
 | `guesser-color`    | ghost suggestion |
+| `multiplexer-active-color` | focused pane's separator (default blue) |
+| `multiplexer-inactive-color` | other panes' separators (default fg) |
 | `textcolor`        | general text color: literals in the template and any element without a specific color |
 
 `textcolor` is the fallback for every element that has no specific `…-color`
@@ -216,6 +224,9 @@ guesser-opacity = '65%'
 | `history`  | `yes`      | `yes`/`no` — record new commands and save them on exit |
 | `historylimit` | `500`  | any number — max commands kept in history (oldest are trimmed; `0` disables) |
 | `animation` | `none`   | `none`/`matrix`/`newcomer`/`placement`/`spinner` — how typed characters appear (see below) |
+| `multiplexer` | `yes` | `yes`/`no` — allow splitting; setting `no` tears down an active mux |
+| `multiplexer-window-limit` | `inf` | `inf` or a number — max panes in one terminal |
+| `multiplexer-style` | `crosshair` | separator style (`crosshair` = tmux look) |
 | `movespeed` | `1`      | letters the cursor advances per Left/Right press (`1..100`) |
 | `scrollspeed` | `1`    | history entries traversed per Up/Down press (`1..100`) |
 | `amplify`   | `2`      | hold-to-boost multiplier: while the same arrow is held (pressed again within 400 ms), each repeat advances `step × amplify`; `yes` = `2`, `no` = `1` |
@@ -252,6 +263,91 @@ scrollspeed = 1    # history entries per up/down press
 amplify = 2        # held arrows advance twice as fast (no = off)
 ```
 
+### Multiplexer
+
+thesh has a built-in tiling multiplexer — no server, no sockets. The
+first split **forks**: your current shell keeps running as pane #1 on
+its own pty (same typed line, aliases, cwd, history), while the parent
+process becomes a pure router that never prompts again; each new pane
+runs a fresh thesh on its own pty. Panes are separated the way tmux
+does it — thin `│`/`─` lines with `┬` `┴` `├` `┤` `┼` at the
+junctions, nothing drawn on the terminal edges — and the focused
+pane's separators glow in the active colour.
+
+| Command | Effect |
+|---|---|
+| `split-window-vertical [N]` | split along a vertical divider (side-by-side), `N` percent (default 50) |
+| `split-window-horizontal [N]` | stacked split, `N` percent |
+| `close-pane` | close the focused pane (tmux kill-pane); closing the last pane leaves the multiplexer |
+| `kill-curent-window` | alias of `close-pane` (`kill-current-window` also accepted) |
+| `kill-all-windows` | kill every pane — emptying the multiplexer hands you a fresh plain shell on the real terminal |
+| `move-to-right/left/up/down-window` | move focus to that pane |
+| `focus-left/right/up/down/next/prev` | move focus between panes |
+| `panes` | list every pane's size and position, marking the focused one |
+
+They work typed at the prompt **and** as bind actions — a bound split
+acts on the focused pane, a typed one splits the pane you type in (so
+running it inside a pane starts that pane's own nested multiplexer).
+Mux verbs (`split-*`, `kill-*`, `move-*`, `focus-*`, `panes`) always
+run in the router; **every other bind is forwarded to the focused pane
+and runs there** — a shortcut like `CTRL + E = exec('micro …')`
+pressed in a child pane opens the program *in that pane*, with its
+cwd and aliases:
+
+```sh
+bind = ALT + V = split-window-vertical 50
+bind = ALT + H = split-window-horizontal 50
+bind = CTRL + Q = kill-curent-window
+bind = CTRL + K = kill-all-windows
+bind = ALT + R-ARROW = move-to-right-window
+bind = ALT + L-ARROW = move-to-left-window
+bind = ALT + U-ARROW = move-to-up-window
+bind = ALT + D-ARROW = move-to-down-window
+```
+
+* **Navigation:** `Ctrl + arrows` moves between panes out of the box (or
+  bind arrows as above — `L-ARROW`/`R-ARROW`/`U-ARROW`/`D-ARROW` are key
+  names). With a single pane nothing changes: Ctrl+arrows keep
+  word-jumping there, and Alt+arrows word-jump everywhere.
+* **Settings:** `multiplexer = 'no'` disables splitting (and tears down
+  an active mux live), `multiplexer-window-limit = 'inf'|N` caps the
+  pane count, `multiplexer-style = 'crosshair'` is the separator look.
+* **Colors:** `multiplexer-active-color` (default blue) paints the
+  separators touching the pane you're typing in; `multiplexer-inactive-color`
+  (default terminal fg) the rest — it's always obvious where your
+  keystrokes go.
+* **Scrollback:** every pane keeps the last 1000 lines; `PgUp`/`PgDn`
+  scroll whichever pane is focused — selected or not — and they keep
+  working while an editor or `htop` runs in it; any other key returns
+  to live.
+* **Mouse:** the pointer works on the pane it is over and **never
+  changes focus** — you move between panes with the move binds only
+  (`Ctrl`+arrows or your bound keys). The wheel scrolls whichever pane
+  it is over; a click is forwarded to that pane's program (htop, an
+  editor, …) **translated to pane-relative coordinates**, and only if
+  that program asked for mouse tracking (`?1000/?1002/?1003` is
+  tracked per pane, like tmux) — clicks on a divider, on scrollback,
+  or when the program never requested mouse are ignored. Mouse
+  reporting is enabled only while the mux runs, and is re-asserted
+  after a program exits or the terminal resizes. Clicks and
+  `Ctrl+arrows` are handled by the router even while a full-screen
+  program runs; `PgUp`/`PgDn` stay with the mux either way.
+* **Activation is a fork:** splitting turns the parent process into
+  the router, and your shell becomes pane #1 with everything in memory
+  intact (typed line, aliases, cwd, history); the pane starts fresh at
+  the top of the screen, tmux-style. When the last pane dies the
+  router hands the terminal back to a fresh plain shell.
+* Pane children run with `$THESH_MUX=1` set, so rc files can guard
+  auto-starts with `[ -z "$TMUX" ] && [ -z "$THESH_MUX" ] && …`.
+* Full-screen apps work: each pane emulates its own terminal (cursor
+  addressing, alternate screen, colors, scroll regions) and repaints
+  only its rectangle; resizing the terminal re-lays every pane out and
+  resizes the children. **Your binds keep working while a program
+  runs** — split, kill, move focus without leaving htop first — and
+  the caret re-lays out with the window (no keypress needed). A
+  prompt following program output without a newline keeps that tail
+  instead of overwriting it.
+
 ### Key bindings
 
 Shortcuts are defined in the config with a `bind = ` prefix, `+`-joined
@@ -287,7 +383,8 @@ bind = ALT + F5 = exec('reload')
   `WINDOWS`, `META` are also accepted) and `SHIFT`, joined with `+`. Keys are
   a single letter, digit or symbol (case-insensitive), or a name: `ENTER TAB
   SPACE BACKSPACE DELETE UP DOWN LEFT RIGHT HOME END PGUP PGDN ESC F1` through
-  `F24`. A modifier is optional — `bind = F11 = …` binds the plain function
+  `F24` — arrows may also be spelled `L-ARROW`/`R-ARROW`/`U-ARROW`/`D-ARROW`.
+  A modifier is optional — `bind = F11 = …` binds the plain function
   key. Terminals report Super/Meta combinations as CSI modifiers (9–16 or
   33–40), which the shell decodes to `SUPER`, so `SUPER + UP` works with the
   arrow keys.

@@ -5,7 +5,10 @@ static int raw_on = 0;
 
 int term_enter_raw(void)
 {
-    if (raw_on) return 0;
+    if (raw_on) {
+        muxdbg("term: enter-raw pid=%d (already on)\n", (int)getpid());
+        return 0;
+    }
     if (tcgetattr(STDIN_FILENO, &orig_tios) < 0) return -1;
 
     struct termios t = orig_tios;
@@ -15,12 +18,14 @@ int term_enter_raw(void)
     t.c_cc[VTIME] = 0;
     if (tcsetattr(STDIN_FILENO, TCSADRAIN, &t) < 0) return -1;
     raw_on = 1;
+    muxdbg("term: enter-raw pid=%d fd=%d\n", (int)getpid(), STDIN_FILENO);
     return 0;
 }
 
 void term_exit_raw(void)
 {
     if (!raw_on) return;
+    muxdbg("term: EXIT-raw pid=%d fd=%d\n", (int)getpid(), STDIN_FILENO);
     tcsetattr(STDIN_FILENO, TCSADRAIN, &orig_tios);
     raw_on = 0;
 }

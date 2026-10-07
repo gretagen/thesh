@@ -129,6 +129,50 @@ historylimit = '30'
 
 animation = matrix
 
+# multiplexer (built-in tiling with tmux-style separators)
+# thin │ ─ lines with ┬ ┴ ├ ┤ ┼ junctions separate the panes and
+# nothing is drawn on the terminal edges; the focused pane's
+# separators take the active colour:
+multiplexer-active-color = 'blue'
+multiplexer-inactive-color = 'default'
+# settings:
+#   multiplexer = 'yes'               allow splitting ('no' disables it
+#                                     and tears down an active mux)
+#   multiplexer-window-limit = 'inf'  max panes ('inf' or a number)
+#   multiplexer-style = 'crosshair'   separator style
+# splits act on the focused pane when bound; typed, they split the pane
+# you type in (inside a pane that starts that pane's own nested mux):
+#   bind = ALT + V = split-window-vertical 50
+#   bind = ALT + H = split-window-horizontal 50
+# moving focus: Ctrl+arrows work out of the box, or bind the arrows:
+#   bind = ALT + R-ARROW = move-to-right-window   (L-/U-/D-ARROW too)
+# window management:
+#   bind = CTRL + Q = kill-curent-window   (kill-current-window too)
+#   bind = CTRL + K = kill-all-windows
+#     first press clears the child panes; killing the shell's own
+#     pane parks the shell and moves focus to its sibling (refused
+#     only when it's the last pane) — kill-all-windows then empties
+#     the mux and brings the shell's prompt back.
+#     binds also fire while htop/an editor runs in a pane.
+# commands: split-window-vertical/horizontal [N], close-pane,
+#   kill-curent-window, kill-all-windows, move-to-*-window,
+#   focus-left/right/up/down/next/prev, panes
+# PgUp/PgDn scroll whichever pane has focus — even while a program
+#   runs in it; any other key returns to live.
+# mouse: the wheel scrolls whichever pane it is over; a click goes
+#   to the program in the pane under the pointer — translated to
+#   that pane's coordinates, only if it asked for mouse tracking —
+#   and never changes focus (move with Ctrl+arrows or your binds).
+#   Clicks on a divider or on scrollback are ignored.
+#   Reporting is on only while the mux runs.
+# splitting never loses your session: the typed line, aliases, cwd
+#   and history stay in memory; each pane starts fresh at the top
+#   of its rectangle, tmux-style.
+# pane children run with $THESH_MUX=1 in the environment.
+multiplexer = 'yes'
+multiplexer-window-limit = 'inf'
+multiplexer-style = crosshair
+
 # movement & scrolling
 #   movespeed   = letters the cursor advances per left/right press (default 1)
 #   scrollspeed = history entries per up/down press (default 1)

@@ -1,6 +1,7 @@
 CC     ?= cc
 CSTD   ?= c23
 LDFLAGS ?=
+LDFLAGS += -lutil                 # forkpty() for the native multiplexer
 
 GNUMAKEFLAGS += -j$(shell nproc 2>/dev/null || echo 1)
 
@@ -20,7 +21,11 @@ all: debug
 debug:   $(OUTDIR)/debug/$(NAME)
 release: $(OUTDIR)/release/$(NAME)
 
-DESTDIR ?= $(HOME)/haliade-root
+# `make install` destination: PREFIX defaults to ~/.local (user-local).
+# DESTDIR is a staging prefix, empty by default; for the Haliade rootfs use
+#   make install PREFIX=/usr DESTDIR=$(HOME)/haliade-root
+DESTDIR ?=
+PREFIX  ?= $(HOME)/.local
 
 SRC := $(sort $(wildcard src/*.c))
 
@@ -44,10 +49,9 @@ $(OUTDIR)/debug $(OUTDIR)/release:
 	mkdir -p $@
 
 install: release
-	install -Dm755 $(OUTDIR)/release/$(NAME) $(DESTDIR)/usr/bin/$(NAME)
-	@test -f $(DESTDIR)/etc/theshrc || install -Dm644 theshrc.sample $(DESTDIR)/etc/theshrc
-	@echo "installed $(NAME) -> $(DESTDIR)/usr/bin/$(NAME)"
-	@echo "system rc   -> $(DESTDIR)/etc/theshrc"
+	install -Dm755 $(OUTDIR)/release/$(NAME) $(DESTDIR)$(PREFIX)/bin/$(NAME)
+	@echo "installed $(NAME) -> $(DESTDIR)$(PREFIX)/bin/$(NAME)"
+	@echo "config: cp theshrc.sample ~/.theshrc   (system-wide: /etc/theshrc)"
 
 clean:
 	rm -rf $(OUTDIR)

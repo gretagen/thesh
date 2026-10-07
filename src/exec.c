@@ -63,7 +63,13 @@ void dump_aliases(FILE *f)
 static const char *builtin_list[] = {
     "cd", "pwd", "echo", "export", "unset", "alias", "unalias",
     "history", "source", "exit", "type", "set", "clearhistory", "hash",
-    "presets", "savepreset", NULL
+    "presets", "savepreset",
+    "split-window-vertical", "split-window-horizontal", "close-pane",
+    "focus-left", "focus-right", "focus-up", "focus-down",
+    "focus-next", "focus-prev", "panes",
+    "kill-curent-window", "kill-current-window", "kill-all-windows",
+    "move-to-right-window", "move-to-left-window",
+    "move-to-up-window", "move-to-down-window", NULL
 };
 
 const char *const *builtin_names(void) { return builtin_list; }
@@ -223,6 +229,72 @@ static int path_of_command(const char *cmd, char *out, size_t outsz)
 static int run_builtin(char **args, int argc)
 {
     const char *c = args[0];
+
+    /* ── multiplexer builtins ─────────────────────────────────────── */
+    if (!strcmp(c, "split-window-vertical") ||
+        !strcmp(c, "split-window-horizontal")) {
+        int vertical = (strstr(c, "horizontal") == NULL);
+        int pct = 50;
+        if (argc > 1 && args[1][0]) {
+            char *end = NULL;
+            long n = strtol(args[1], &end, 10);
+            if (end != args[1] && n >= 0 && n <= 100) pct = (int)n;
+        }
+        shell_status = mux_split(vertical, pct) == 0 ? 0 : 1;
+        return 1;
+    }
+    if (!strcmp(c, "close-pane")) {
+        shell_status = mux_close() == 0 ? 0 : 1;
+        return 1;
+    }
+    if (!strcmp(c, "kill-curent-window") ||
+        !strcmp(c, "kill-current-window")) {
+        shell_status = mux_close() == 0 ? 0 : 1;
+        return 1;
+    }
+    if (!strcmp(c, "kill-all-windows")) {
+        shell_status = mux_kill_all() == 0 ? 0 : 1;
+        return 1;
+    }
+    if (!strncmp(c, "move-to-", 8)) {
+        const char *d = c + 8;
+        int dir = -1;
+        if      (!strcmp(d, "right-window")) dir = 1;
+        else if (!strcmp(d, "left-window"))  dir = 0;
+        else if (!strcmp(d, "up-window"))    dir = 2;
+        else if (!strcmp(d, "down-window"))  dir = 3;
+        if (dir < 0 || !mux_active()) {
+            dprintf(STDERR_FILENO, "%s: mux: not multiplexed\n", THESH_NAME);
+            shell_status = 1;
+            return 1;
+        }
+        mux_focus_dir(dir);
+        shell_status = 0;
+        return 1;
+    }
+    if (!strncmp(c, "focus-", 6)) {
+        if (!mux_active()) {
+            dprintf(STDERR_FILENO, "%s: mux: not multiplexed\n", THESH_NAME);
+            shell_status = 1;
+            return 1;
+        }
+        const char *d = c + 6;
+        if      (!strcmp(d, "left"))  mux_focus_dir(0);
+        else if (!strcmp(d, "right")) mux_focus_dir(1);
+        else if (!strcmp(d, "up"))    mux_focus_dir(2);
+        else if (!strcmp(d, "down"))  mux_focus_dir(3);
+        else if (!strcmp(d, "next"))  mux_focus_cycle(1);
+        else if (!strcmp(d, "prev"))  mux_focus_cycle(-1);
+        else dprintf(STDERR_FILENO, "%s: focus: unknown direction '%s'\n",
+                     THESH_NAME, d);
+        shell_status = 0;
+        return 1;
+    }
+    if (!strcmp(c, "panes")) {
+        mux_list();
+        shell_status = mux_active() ? 0 : 1;
+        return 1;
+    }
 
     if (!strcmp(c, "cd")) {
         char tgt[PATH_MAX];
@@ -549,9 +621,12 @@ static int apply_redirs(const Redir *redr, int n)
     return 0;
 }
 
+/* Child body for foreground commands: applies redirs, execs. */
+
 static void run_child(char **argv, const Redir *redr, int nredir)
 {
     fflush(stdout);
+
     pid_t pid = fork();
     if (pid < 0) {
         perror("fork");
@@ -785,7 +860,7 @@ static int run_pipeline(char **segs, int n)
 
     int st = 0;
     for (int i = 0; i < n; i++) {
-        int ws;
+        int ws = 0;
         while (waitpid(pids[i], &ws, 0) < 0) {
             if (errno != EINTR) break;
         }
@@ -977,12 +1052,18 @@ static int exec_unit(const char *unit, int bg)
     split_pipeline(unit, &segs, &n);
     if (n == 0) { free(segs); return 0; }
 
-    if (!bg) term_exit_raw();
+    /* Drop raw mode only while the mux is NOT up (children then get the
+     * real tty, as in a plain shell). Restore symmetrically afterwards:
+     * a split *bind* activates the mux mid-command, and an exit guarded
+     * by "mux is active now" would leave ICANON on — every following
+     * keystroke would then buffer until Enter. */
+    int raw_off = 0;
+    if (!bg && !mux_active()) { term_exit_raw(); raw_off = 1; }
     fflush(stdout);
 
     int st = (n == 1) ? exec_single(segs[0]) : run_pipeline(segs, n);
 
-    if (!bg) term_enter_raw();
+    if (raw_off) term_enter_raw();
     for (int i = 0; i < n; i++) free(segs[i]);
     free(segs);
     return st;

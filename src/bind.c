@@ -60,6 +60,11 @@ static int key_from(const char *t)
     if (ieq(t, "DOWN"))        return K_DOWN;
     if (ieq(t, "LEFT"))        return K_LEFT;
     if (ieq(t, "RIGHT"))       return K_RIGHT;
+    /* R-ARROW style tokens (arrive as word-keys when modified) */
+    if (ieq(t, "U-ARROW") || ieq(t, "UP-ARROW"))     return K_UP;
+    if (ieq(t, "D-ARROW") || ieq(t, "DOWN-ARROW"))   return K_DOWN;
+    if (ieq(t, "L-ARROW") || ieq(t, "LEFT-ARROW"))   return K_LEFT;
+    if (ieq(t, "R-ARROW") || ieq(t, "RIGHT-ARROW"))  return K_RIGHT;
     if (ieq(t, "HOME"))        return K_HOME;
     if (ieq(t, "END"))         return K_END;
     if (ieq(t, "PGUP") || ieq(t, "PAGEUP"))     return K_PGUP;
@@ -125,10 +130,53 @@ static int is_key_token(const char *t)
            ieq(t, "BACKSPACE") || ieq(t, "BACK") ||
            ieq(t, "DELETE") || ieq(t, "DEL") ||
            ieq(t, "UP") || ieq(t, "DOWN") || ieq(t, "LEFT") || ieq(t, "RIGHT") ||
+           ieq(t, "U-ARROW") || ieq(t, "UP-ARROW") ||
+           ieq(t, "D-ARROW") || ieq(t, "DOWN-ARROW") ||
+           ieq(t, "L-ARROW") || ieq(t, "LEFT-ARROW") ||
+           ieq(t, "R-ARROW") || ieq(t, "RIGHT-ARROW") ||
            ieq(t, "HOME") || ieq(t, "END") ||
            ieq(t, "PGUP") || ieq(t, "PAGEUP") ||
            ieq(t, "PGDN") || ieq(t, "PAGEDOWN") ||
            ieq(t, "ESC") || ieq(t, "ESCAPE");
+}
+
+/* Is `a` a multiplexer verb action (`split-window-vertical 50`,
+ * `close-pane`, `focus-next`, `panes`, …)? `split-window-vertial` (the
+ * typo in a long-standing rc) is tolerated as an alias. */
+static int is_verb_action(const char *a)
+{
+    char w[48];
+    size_t i = 0;
+    while (a[i] && !isspace((unsigned char)a[i]) && i < sizeof w - 1) {
+        w[i] = a[i];
+        i++;
+    }
+    w[i] = 0;
+    const char *rest = a + i;
+    while (*rest && isspace((unsigned char)*rest)) rest++;
+
+    if (!strcmp(w, "split-window-vertical") ||
+        !strcmp(w, "split-window-vertial") ||
+        !strcmp(w, "split-window-horizontal")) {
+        if (!*rest) return 1;
+        char *end = NULL;
+        long n = strtol(rest, &end, 10);
+        if (end == rest) return 0;
+        while (*end && isspace((unsigned char)*end)) end++;
+        return *end == 0 && n >= 0 && n <= 100;
+    }
+    if (*rest) return 0;
+    return !strcmp(w, "close-pane") || !strcmp(w, "panes") ||
+           !strcmp(w, "kill-curent-window") ||
+           !strcmp(w, "kill-current-window") ||
+           !strcmp(w, "kill-all-windows") ||
+           !strcmp(w, "move-to-right-window") ||
+           !strcmp(w, "move-to-left-window") ||
+           !strcmp(w, "move-to-up-window") ||
+           !strcmp(w, "move-to-down-window") ||
+           !strcmp(w, "focus-left")  || !strcmp(w, "focus-right") ||
+           !strcmp(w, "focus-up")    || !strcmp(w, "focus-down") ||
+           !strcmp(w, "focus-next")  || !strcmp(w, "focus-prev");
 }
 
 /* Parse one config line that looks like a key binding. Returns 1 if the
@@ -244,6 +292,9 @@ int bind_parse_line(const char *line)
                     THESH_NAME);
             return 1;
         }
+    } else if (is_verb_action(action)) {
+        b.kind = BIND_VERB;
+        snprintf(b.cmd, sizeof b.cmd, "%s", action);
     } else {
         dprintf(STDERR_FILENO, "%s: bind: unknown action '%s'\n",
                 THESH_NAME, action);
@@ -267,19 +318,26 @@ int bind_parse_line(const char *line)
 
 const Bind *bind_lookup(int mods, int key)
 {
-    for (int i = 0; i < nbinds; i++)
-        if (binds[i].mods == mods && binds[i].key == key)
-            return &binds[i];
-    /* No exact match: if the press carried Shift, retry without it so a
-     * plain or SUPER/CTRL+… bind still catches the shifted press (that is
-     * how `SUPER + UP` keeps firing on Super+Shift+Up) while any explicit
-     * SHIFT + … bind always wins via the exact match above. */
-    if (mods & MOD_SHIFT) {
-        int base = mods & ~MOD_SHIFT;
-        for (int i = 0; i < nbinds; i++)
-            if (binds[i].mods == base && binds[i].key == key)
-                return &binds[i];
-    }
+    /* Ali/Ctrl+arrow presses arrive as the word-move keys (K_WLEFT /
+     * K_WRIGHT), so a bind stored as (ALT, K_LEFT) must also match the
+     * arrival (ALT, K_WLEFT). Exact candidates come first, then the
+     * word-key alias, with and without Shift. */
+    int keys[2];
+    keys[0] = key;
+    keys[1] = (key == K_WLEFT) ? K_LEFT :
+              (key == K_WRIGHT) ? K_RIGHT : key;
+    int nkeys = (keys[1] != keys[0]) ? 2 : 1;
+
+    int modset[2];
+    modset[0] = mods;
+    modset[1] = mods & ~MOD_SHIFT;
+    int nmodset = (modset[1] != mods) ? 2 : 1;
+
+    for (int m = 0; m < nmodset; m++)
+        for (int k = 0; k < nkeys; k++)
+            for (int i = 0; i < nbinds; i++)
+                if (binds[i].mods == modset[m] && binds[i].key == keys[k])
+                    return &binds[i];
     return NULL;
 }
 
@@ -329,6 +387,10 @@ static void dump_bind_action(FILE *f, const Bind *b)
             else                       fprintf(f, "\"%s\"", b->ask);
             fputc(')', f);
         }
+        fputc('\n', f);
+        break;
+    case BIND_VERB:
+        fputs(b->cmd, f);
         fputc('\n', f);
         break;
     }

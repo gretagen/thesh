@@ -27,13 +27,17 @@
 #include <time.h>
 
 #define THESH_NAME    "thesh"
-#define THESH_VERSION "0.4.4"
+#define THESH_VERSION "0.5.0"
 #define HIST_NAME     ".thesh_history"
 #define HIST_MAX      500
 #define ALIAS_MAX     128
 #define LINE_MAX_CP   4096
 
 extern int shell_status;
+extern volatile sig_atomic_t thesh_winched;   /* SIGWINCH: redraw needed  */
+extern volatile sig_atomic_t thesh_conted;    /* SIGCONT: re-assert state  */
+void mux_notify_winch(void);                  /* wake the mux relayout    */
+void thesh_on_cont(void);                     /* raw+mouse after resume    */
 
 /* ---- util.c ---- */
 void   *xmalloc(size_t n);
@@ -43,6 +47,11 @@ void    out(const char *s);
 void    outn(const void *s, size_t n);
 void    outf(const char *fmt, ...);
 char   *get_home(void);
+int     muxdbg_on(void);                    /* THESH_MUX_DEBUG=<path> log  */
+void    muxdbg(const char *fmt, ...);
+void    muxdbg_bytes(const char *b, size_t n);
+void    tty_buf_write(const char *b, size_t n); /* batched tty output     */
+void    tty_buf_flush(void);                /* push it to the real tty     */
 
 /* ---- utf8.c ---- */
 int     utf8_decode(const char *s, int *len, uint32_t *cp);
@@ -118,7 +127,7 @@ enum {
 #define BIND_CMD_MAX 256
 #define BIND_ASK_MAX 64
 
-typedef enum { BIND_CLOSE, BIND_COPY, BIND_PASTE, BIND_EXEC } BindKind;
+typedef enum { BIND_CLOSE, BIND_COPY, BIND_PASTE, BIND_EXEC, BIND_VERB } BindKind;
 
 typedef struct {
     int      mods;          /* MOD_CTRL / MOD_ALT bitmask             */
@@ -154,6 +163,11 @@ typedef struct {
     char  *col_guess;      /* ghost suggestion color                   */
     char  *col_user;       /* user-color                               */
     char  *textcolor;      /* general prompt text color                */
+    char  *col_mux_active; /* multiplexer border: focused pane         */
+    char  *col_mux_inactive;/* multiplexer border: unfocused panes     */
+    int    multiplexer;     /* 1 = splits allowed                      */
+    int    mux_window_limit;/* max panes; 0 = unlimited (inf)          */
+    int    mux_style;       /* 0 = crosshair (tmux separators)         */
     int    op_rightwall;   /* per-element opacity (0-100), -1 = unset  */
     int    op_leftwall;
     int    op_sep;
@@ -185,9 +199,110 @@ char    *render_ps1(const char *ps1, const char *user,
 void     color_sgr(const char *sgr, int opacity, char *buf, size_t sz);
 void     config_dump_current(FILE *f);
 
+/* ---- screen.c / mux.c: native terminal multiplexer ---- */
+#define MUX_MAX_PANES  128
+#define MUX_SCROLLBACK 1000
+#define MUX_MIN_W      8              /* smallest pane that may be split */
+#define MUX_MIN_H      6
+
+/* cell attribute bits (SGR) */
+#define CA_BOLD    0x01
+#define CA_DIM     0x02
+#define CA_ITALIC  0x04
+#define CA_UL      0x08
+#define CA_REV     0x10
+#define CA_BLINK   0x20
+#define CA_INVIS   0x40
+#define CA_STRIKE  0x80
+
+/* Cell colors: kind 0 = terminal default, 1 = basic SGR (idx holds the
+ * original 30..97/40..107 number), 2 = 256-palette, 3 = 24-bit rgb. */
+typedef struct { uint8_t kind, idx, r, g, b; } MuxColor;
+
+typedef struct {
+    uint32_t cp;                          /* 0 = blank space            */
+    uint8_t  attrs;                       /* CA_* bits                  */
+    uint8_t  pad;                         /* 1 = 2nd half of a wide glyph */
+    MuxColor fg, bg;
+} MuxCell;
+
+typedef struct {
+    int      w, h;                        /* interior grid (no border)  */
+    MuxCell *cells;                       /* w*h                        */
+    MuxCell *alt;                         /* alternate screen if held   */
+    int      cx, cy, wrap;                /* cursor + deferred wrap     */
+    int      autowrap;                    /* DECAWM (on by default)     */
+    uint8_t  attrs; MuxColor fg, bg;      /* current pen                */
+    int      top, bot;                    /* scroll region (0-based)    */
+    int      scx, scy;                    /* saved cursor (DECSC)       */
+    uint8_t  sattrs; MuxColor sfg, sbg; int ssaved;
+    int      asx, asy;                    /* cursor saved by 1048/1049  */
+    int      cur_vis;                     /* DECTCEM (1 = visible)      */
+    int      mouse;                       /* requested mouse level:      */
+                                          /* bit0-2: 0 off,1 std,2 btn, */
+                                          /* 4 all; bit3: SGR (1006)    */
+    MuxCell **sb;                         /* scrollback ring rows       */
+    int      *sb_ws;                      /* that row's width           */
+    int      sb_head, sb_count;           /* next slot / live count     */
+    int      view;                        /* lines scrolled up (0=live) */
+    uint8_t *dirty;                       /* one flag per row           */
+    int      all_dirty;
+    /* parser state — persists across feed() chunks */
+    int      st;                          /* PT_* below                 */
+    char     csib[40]; int csin;          /* raw CSI collected          */
+    int      cp_p[16]; int cp_n;          /* parsed CSI params          */
+    char     csi_priv;                    /* '?', '>', '<', '=' or 0    */
+    uint8_t  u_buf[4]; int u_have, u_need;/* incremental utf-8          */
+    uint32_t last_cp;                     /* last printed (for REP)     */
+    /* writeback for child panes (DSR/DA replies) */
+    void   (*reply)(void *ctx, const char *b, size_t n);
+    void    *reply_ctx;
+} MuxScreen;
+
+typedef struct {
+    MuxScreen scr;
+    int      x, y, w, h;                  /* rect including its border  */
+    int      master;                      /* pty master                 */
+    pid_t    pid;                         /* child pid                  */
+} MuxPane;
+
+int  mux_active(void);                    /* this process hosts the mux  */
+void mux_term_write(const char *b, size_t n); /* raw write to the real tty */
+void mux_pump(void);                      /* pane ptys, repaint, park    */
+int  mux_split(int vertical, int pct);    /* 1st call: fork-on-split     */
+int  mux_close(void);
+int  mux_focus_dir(int dir);              /* 0 left, 1 right, 2 up, 3 down */
+int  mux_focus_cycle(int delta);
+void mux_scroll(int delta);               /* >0 up, <0 down, 0 = live   */
+int  mux_mouse(int button, int x, int y, int release); /* 1 = pass to TUI */
+const char *mux_mouse_seq(int *len);      /* translated SGR for the pane */
+void mux_forward(const char *b, size_t n);/* keys -> focused pane's pty */
+void mux_forward_mouse(const char *b, size_t n); /* mouse -> clicked pane */
+void mux_resize_check(void);              /* consume the SIGWINCH flag  */
+void mux_shutdown(void);                  /* restore tty, kill panes    */
+void mux_leave(void);                     /* leave mux + fresh shell    */
+int  mux_kill_all(void);                  /* kill every pane            */
+void mux_list(void);                      /* `panes` builtin output      */
+void term_size(int *cols, int *rows);    /* tty size, 80x24 fallback     */
+
+/* screen.c */
+void mux_screen_init(MuxScreen *s, int w, int h);
+void mux_screen_resize(MuxScreen *s, int w, int h);
+void mux_screen_free(MuxScreen *s);
+void mux_screen_feed(MuxScreen *s, const char *data, size_t n);
+void mux_screen_repaint(MuxScreen *s, int x, int y, int w, int h);
+
 /* ---- editor.c ---- */
 char   *edit_line(const char *prompt, int *cancelled);
 int     ed_read_key(uint32_t *cp, int *mods);
+const char *ed_raw(int *len);   /* raw bytes of the last key read      */
+void    ed_pushback(const char *b, int n); /* unread bytes for read_byte */
+int     ed_mux_nav(int key, int mods);     /* ctrl+arrow → pane dir      */
+int     ed_mouse_forward(void);            /* mouse event belongs to TUI  */
+const Bind *ed_bind_lookup(int key, uint32_t cp, int mods);
+                                          /* map key → bind (router)     */
+void    ed_reset_anchor(void);            /* pane shell: drop old coords */
+void    thesh_config_check(void);         /* rc auto-reload tick         */
 int     prompt_line(char *buf, size_t sz, const char *prompt);
 
 /* ---- exec.c ---- */

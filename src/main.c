@@ -61,7 +61,11 @@ static void maybe_reload_config(void)
 static void thesh_on_exit(void)
 {
     term_exit_raw();
+    mux_shutdown();
 }
+
+/* rc auto-reload tick, shared with the mux router loop */
+void thesh_config_check(void) { maybe_reload_config(); }
 
 /* ── /etc/environment ───────────────────────────────────────────────────
  * pam_env-style KEY=value lines, loaded before anything else so declared
@@ -158,11 +162,24 @@ char *build_prompt(void)
     return render_looks_str(config_default_looks(), user, host, dir);
 }
 
+volatile sig_atomic_t thesh_winched = 0;
+volatile sig_atomic_t thesh_conted = 0;
+
+static void on_winch(int sig)
+{
+    (void)sig;
+    thesh_winched = 1;      /* redraw the edit line          */
+    mux_notify_winch();     /* and let the mux re-layout     */
+}
+static void on_cont(int sig)  { (void)sig; thesh_conted = 1; }
+
 int main(int argc, char **argv)
 {
     setlocale(LC_ALL, "");
     signal(SIGINT, SIG_IGN);       /* shell itself never dies on SIGINT;    */
     signal(SIGQUIT, SIG_IGN);      /* children get defaults in run_child(). */
+    signal(SIGWINCH, on_winch);    /* redraw the line the size changed      */
+    signal(SIGCONT, on_cont);      /* a VT switch may have reset our state  */
 
     shell_status = 0;
     config_init();

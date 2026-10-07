@@ -93,13 +93,50 @@ static int is_word(uint32_t c)
 }
 
 /* ── Key reading ──────────────────────────────────────────────────── */
+/* When the mux is up this also pumps pane output, so children repaint
+ * in real time even while we sit blocked waiting for the next key. */
+/* Bytes handed back by the mux's DSR cursor probe: they must be
+ * consumed before touching stdin again. */
+static char pushback[128];
+static int  pushback_len = 0, pushback_pos = 0;
+
+void ed_pushback(const char *b, int n)
+{
+    if (n <= 0) return;
+    int room = (int)sizeof pushback - pushback_len;
+    if (n > room) n = room;                /* drop overflow (rare) */
+    if (n <= 0) return;
+    memcpy(pushback + pushback_len, b, (size_t)n);
+    pushback_len += n;
+}
+
+static void ed_check_resize(void);   /* defined with ed_draw below     */
+
 static int read_byte(void)
 {
     unsigned char c;
-    while (read(STDIN_FILENO, &c, 1) != 1) {
-        if (errno != EINTR) return -1;
+    for (;;) {
+        ed_check_resize();                          /* resize / SIGCONT   */
+        if (pushback_pos < pushback_len) {         /* DSR probe leftovers */
+            c = (unsigned char)pushback[pushback_pos++];
+            if (pushback_pos >= pushback_len) { pushback_len = pushback_pos = 0; }
+            return c;
+        }
+        struct pollfd p = { STDIN_FILENO, POLLIN, 0 };
+        int r = poll(&p, 1, mux_active() ? 16 : -1);
+        if (r == 0) {                          /* idle tick: repaint    */
+            mux_pump();
+            continue;
+        }
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        ssize_t n = read(STDIN_FILENO, &c, 1);
+        if (n == 1) return c;
+        if (n < 0 && errno == EINTR) continue;
+        return -1;                             /* EOF or error          */
     }
-    return c;
 }
 
 /* Decode an xterm modifier number (2=shift, 3/4=alt, 5/6=ctrl,
@@ -120,6 +157,13 @@ static int mod_bits(int mod)
     return bits;
 }
 
+static int mouse_fwd = 0;   /* last mouse event belongs to the TUI   */
+
+int ed_mouse_forward(void)  /* consulted only for the event just read */
+{
+    return mouse_fwd;
+}
+
 static int parse_seq(const char *s, int n, uint32_t *cp, int *mods)
 {
     if (n == 1) { *cp = 27; return K_NONE; }                      /* bare ESC */
@@ -136,6 +180,41 @@ static int parse_seq(const char *s, int n, uint32_t *cp, int *mods)
         *mods |= MOD_ALT;
         *cp = (unsigned char)s[1];
         return K_NONE;
+    }
+
+    /* SGR mouse event (the mux enables 1000/1006 while active):
+     * CSI < button ; col ; row M/m — handled centrally, never inserted.
+     * mux_mouse tells us whether the event belongs to the focused
+     * pane's program (click-through). A truncated or malformed <CSI
+     * must be dropped, never fall through to the *cp = s[n-1] tail
+     * below — that used to type stray characters when a long event
+     * hit the old 16-byte seq buffer. */
+    if (n > 2 && s[1] == '[' && s[2] == '<') {
+        *cp = 0;
+        if (n > 4 && (s[n - 1] == 'M' || s[n - 1] == 'm')) {
+            int v[3] = { 0, 0, 0 }, vi = 0;
+            for (int i = 3; i < n - 1 && vi < 3; i++) {
+                if (s[i] >= '0' && s[i] <= '9')
+                    v[vi] = v[vi] * 10 + (s[i] - '0');
+                else if (s[i] == ';' && vi < 2)
+                    vi++;
+            }
+            mouse_fwd = mux_mouse(v[0], v[1], v[2], s[n - 1] == 'm');
+        } else {
+            mouse_fwd = 0;                    /* truncated: drop cleanly */
+        }
+        return K_NONE;
+    }
+
+    /* a DSR cursor reply (`CSI row ; col R`) answers our own probe —
+     * if it arrives late it must never become typed input */
+    if (n > 4 && s[1] == '[' && s[n - 1] == 'R') {
+        int semi = 0, ok = 1;
+        for (int i = 2; i < n - 1; i++) {
+            if (s[i] == ';') { if (++semi > 1) { ok = 0; break; } }
+            else if (!isdigit((unsigned char)s[i])) { ok = 0; break; }
+        }
+        if (ok && semi == 1) { *cp = 0; return K_NONE; }
     }
 
     if (n >= 2 && (s[1] == '[' || s[1] == 'O')) {                 /* CSI */
@@ -158,8 +237,8 @@ static int parse_seq(const char *s, int n, uint32_t *cp, int *mods)
         if (n > 2 && s[1] == 'O') fin = s[n - 1];
 
         switch (fin) {
-        case 'A': *mods |= mod_bits(mod); return (mod == 3) ? K_WLEFT : K_UP;
-        case 'B': *mods |= mod_bits(mod); return (mod == 3) ? K_WRIGHT : K_DOWN;
+        case 'A': *mods |= mod_bits(mod); return K_UP;
+        case 'B': *mods |= mod_bits(mod); return K_DOWN;
         case 'C': *mods |= mod_bits(mod); return (mod == 3 || mod == 5) ? K_WRIGHT : K_RIGHT;
         case 'D': *mods |= mod_bits(mod); return (mod == 3 || mod == 5) ? K_WLEFT : K_LEFT;
         case 'P': case 'Q': case 'R': case 'S':   /* F1-F4 (CSI or SS3) */
@@ -234,17 +313,46 @@ static int seq_complete(const char *s, int n)
     return 1;                              /* Alt+X at 2 bytes         */
 }
 
+static char key_raw[32];                 /* raw bytes of last key read */
+static int  key_rawlen = 0;
+
+const char *ed_raw(int *len)
+{
+    if (len) *len = key_rawlen;
+    return key_raw;
+}
+
 int ed_read_key(uint32_t *cp, int *mods)
 {
     *mods = 0;
     int c = read_byte();
     if (c < 0) return K_EOF;
+    key_raw[0] = (char)c;
+    key_rawlen = 1;
 
     if (c == 27) {
-        char seq[16];
+        char seq[32];                        /* holds long SGR mouse events */
         int n = 0;
         seq[n++] = 27;
         while (n < (int)sizeof seq - 1) {
+            /* A DSR reply can sit in the pushback (cursor_probe parks
+             * interleaved bytes there). Its tail must be assembled from
+             * the pushback — polling only stdin would time out mid-
+             * sequence and type the reply (`[2;3R`) as literal text.
+             * With only ESC so far, continue on a real sequence
+             * introducer so a pushback of plain keystrokes still leaves
+             * ESC bare; once started, drain it to seq_complete(). */
+            if (pushback_pos < pushback_len) {
+                if (n > 1) {                 /* sequence started: drain   */
+                    int b = read_byte();
+                    if (b < 0) break;
+                    seq[n++] = (char)b;
+                    if (seq_complete(seq, n)) break;   /* one event per call */
+                    continue;
+                }
+                unsigned char nxt = (unsigned char)pushback[pushback_pos];
+                if (nxt != '[' && nxt != 'O' && nxt != 27) break;
+            }
             struct pollfd p = { STDIN_FILENO, POLLIN, 0 };
             if (poll(&p, 1, 50) <= 0) break;   /* bare ESC: silence decides */
             int b = read_byte();
@@ -252,6 +360,8 @@ int ed_read_key(uint32_t *cp, int *mods)
             seq[n++] = (char)b;
             if (seq_complete(seq, n)) break;   /* one event per call */
         }
+        memcpy(key_raw, seq, (size_t)n);
+        key_rawlen = n;
         return parse_seq(seq, n, cp, mods);
     }
 
@@ -274,6 +384,7 @@ int ed_read_key(uint32_t *cp, int *mods)
             int b = read_byte();
             if (b < 0) break;
             raw[i] = (char)b;
+            if (key_rawlen < (int)sizeof key_raw) key_raw[key_rawlen++] = (char)b;
         }
     }
 
@@ -529,8 +640,257 @@ static void compute_suggest(void)
 }
 
 /* ── Rendering ────────────────────────────────────────────────────── */
+/* ── wrap-aware line drawing ─────────────────────────────────────────
+ * ed_draw historically did "\r" + prompt + buffer, assuming the line
+ * fits one row. In a narrow mux pane it wraps, and every redraw then
+ * restarts on the wrapped row — the line drifts down one row per wrap
+ * and leaves duplicates behind. Track the absolute anchor row (the mux
+ * self-screen reports its cursor for free) and redraw by returning to
+ * it, erasing the old span, and re-emitting. The plain terminal keeps
+ * the historical single-row draw (anchors only exist under the mux). */
+static int ed_anchor = -1;   /* self-pane row the line starts on        */
+static int ed_anchor_col = 0;/* …and its column (prompt may start late) */
+static int ed_off    = 0;    /* cursor's row offset below the anchor    */
+static int ed_span   = 1;    /* rows the drawn line occupied            */
+static int ed_w      = 80;   /* last seen pane geometry                 */
+static int ed_h      = 24;
+static int ed_drew   = 0;    /* a draw already happened for this line   */
+
+/* Where is the cursor? The mux self pane answers from memory; a child
+ * pane under a mux asks its emulator (in-process, instant); a plain
+ * terminal keeps the legacy single-row draw — no round trip there. */
+static int cursor_probe(int *row, int *col)
+{
+    static int probe_ok = 1;            /* sticky: never stall typing    */
+    if (!getenv("THESH_MUX")) { probe_ok = 0; return -1; }
+    if (!probe_ok) return -1;
+    out("\033[6n");
+    /* Read until the reply shows up — keystrokes forwarded by the mux
+     * parent may arrive first; they are pushed back afterwards in
+     * order. Give up only after real silence (misses), never on a
+     * key-interleaved read: the reply is still in flight then. */
+    static int misses = 0;
+    char buf[256];
+    int nr = 0;
+    int rep = -1;                     /* offset of the reply's ESC      */
+    for (int stage = 0; stage < 3 && rep < 0; stage++) {
+        struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
+        if (poll(&pfd, 1, stage ? 75 : 100) <= 0) break;
+        ssize_t r = read(STDIN_FILENO, buf + nr,
+                         sizeof buf - 1 - (size_t)nr);
+        if (r <= 0) break;
+        nr += (int)r;
+        for (int i = 0; i + 1 < nr; i++) {
+            if (buf[i] != 0x1b || buf[i + 1] != '[') continue;
+            int j = i + 2, r0 = 0, c0 = 0;
+            while (j < nr && buf[j] >= '0' && buf[j] <= '9') { r0 = r0 * 10 + (buf[j] - '0'); j++; }
+            if (j >= nr || buf[j] != ';') continue;
+            j++;
+            while (j < nr && buf[j] >= '0' && buf[j] <= '9') { c0 = c0 * 10 + (buf[j] - '0'); j++; }
+            if (j < nr && buf[j] == 'R' && r0 > 0 && c0 > 0) {
+                rep = i;
+                *row = r0 - 1;
+                *col = c0 - 1;
+                muxdbg("probe: reply row=%d col=%d\n", *row, *col);
+                /* keys before the reply keep their order; after it too */
+                if (i > 0) ed_pushback(buf, i);
+                if (j + 1 < nr) ed_pushback(buf + j + 1, nr - j - 1);
+                return 0;
+            }
+        }
+    }
+    /* Never push back a partial reply prefix — those bytes answer our
+     * own probe and would otherwise be typed into the line as text
+     * (the `[4;1R` glitch). Only an ESC-anchored reply-shaped suffix
+     * is dropped; real keys (and any sequence with a final byte that
+     * isn't part of a reply) are kept. */
+    int keep = nr;
+    int last_esc = -1;
+    for (int i = nr - 1; i >= 0; i--)
+        if ((unsigned char)buf[i] == 0x1b) { last_esc = i; break; }
+    if (last_esc >= 0) {
+        int ok = 1;
+        for (int i = last_esc + 1; i < nr; i++) {
+            unsigned char c = (unsigned char)buf[i];
+            if (!(c == '[' || c == ';' || (c >= '0' && c <= '9'))) { ok = 0; break; }
+        }
+        if (ok) keep = last_esc;        /* suffix is a (partial) reply   */
+    }
+    if (keep > 0) ed_pushback(buf, keep);
+    if (nr == 0 && ++misses >= 3) probe_ok = 0;  /* true silence: fall back */
+    return -1;
+}
+
+/* Visible width of the prompt in cells. ANSI escapes (SGR colors, OSC)
+ * render as ZERO cells — the mux emulator consumes them without advancing
+ * the cursor, so counting their bytes made every mux-mode cursor
+ * position drift far right of the real line (the "floating block cursor"
+ * bug: prompt_cells() returned 72 for a 33-cell prompt with colors). */
+static int prompt_cells(void)
+{
+    int c = 0;
+    if (!prompt) return 0;
+    const char *p = prompt;
+    while (*p) {
+        if (*p == 0x1b) {                   /* escape: skip, render 0    */
+            p++;
+            if (*p == '[') {                /* CSI: params until final    */
+                p++;
+                while (*p && !(*p >= 0x40 && *p <= 0x7e)) p++;
+                if (*p) p++;
+            } else if (*p == ']') {         /* OSC: until BEL or ST       */
+                p++;
+                while (*p && *p != 0x07) {
+                    if (p[0] == 0x1b && p[1] == '\\') { p += 2; break; }
+                    p++;
+                }
+                if (*p == 0x07) p++;
+            } else if (*p) {
+                p++;                        /* ESC x (charset, DECSC …)   */
+            }
+            continue;
+        }
+        int n;
+        uint32_t cp;
+        utf8_decode(p, &n, &cp);
+        c += cp_width(cp);
+        p += n;
+    }
+    return c;
+}
+
+/* Position of cell `c` (counted from the line's start) on the anchor
+ * row: the first row only has `cols - ed_anchor_col` cells left. */
+static int ed_row_of(int c)
+{
+    int cap0 = ed_w - ed_anchor_col;
+    if (cap0 < 1) cap0 = 1;
+    if (c < cap0) return 0;
+    return 1 + (c - cap0) / ed_w;
+}
+
+static int ed_col_of(int c)
+{
+    int cap0 = ed_w - ed_anchor_col;
+    if (cap0 < 1) cap0 = 1;
+    if (c < cap0) return ed_anchor_col + c;
+    return (c - cap0) % ed_w;
+}
+
 static void ed_draw(void)
 {
+    int cols = 0, rows = 0, cx = 0, cy = 0;
+    int have;
+
+    /* Pane shells draw against their own pty: geometry is the pty size
+     * and the cursor comes from one DSR probe per fresh line — the
+     * parent router answers from the pane's emulator. Plain terminals
+     * keep the legacy single-row draw. */
+    if (getenv("THESH_MUX")) {
+        term_size(&cols, &rows);        /* the pty IS the pane          */
+        have = 1;
+        if (ed_anchor < 0)              /* anchor needs the cursor:     */
+            have = cursor_probe(&cy, &cx) == 0;   /* once per line      */
+    } else {
+        have = 0;                       /* plain terminal               */
+    }
+
+    if (have && cols > 0 && rows > 0) {
+        int plen = prompt_cells();
+        int cur_cell = plen + bcells(&e, 0, e.cur);
+        int tcells = plen + bcells(&e, 0, e.len) + bcells(&gh, 0, gh.len);
+
+        if (muxdbg_on())
+            muxdbg("draw: pid=%d have=%d geom=%dx%d cx=%d cy=%d "
+                   "anchor_in=%d acol=%d off=%d span=%d w=%d h=%d "
+                   "cur_cell=%d tcells=%d gh=%d elen=%d ecur=%d\n",
+                   (int)getpid(), have, cols, rows, cx, cy, ed_anchor,
+                   ed_anchor_col, ed_off, ed_span, ed_w, ed_h, cur_cell,
+                   tcells, gh.len, e.len, e.cur);
+
+        if (ed_anchor >= 0 && (cols != ed_w || rows != ed_h)) {
+            /* resized: keep the anchor and re-fit it — no cursor probe
+             * needed, all positioning below is absolute */
+            if (ed_anchor + ed_span > rows) {
+                ed_anchor = rows - ed_span;
+                if (ed_anchor < 0) ed_anchor = 0;
+            }
+        }
+        if (ed_anchor == -1) {                    /* fresh line: the     */
+            ed_anchor = cy;                       /* line starts AT the   */
+            ed_anchor_col = cx;                   /* cursor (no col0 snap */
+            ed_off = 0;                           /* over program output) */
+            ed_span = 1;
+            if (ed_anchor > rows - 1) ed_anchor = rows - 1;
+            if (ed_anchor < 0) ed_anchor = 0;
+        }
+        ed_w = cols; ed_h = rows;
+        int old_span = ed_span;
+        if (muxdbg_on())
+            muxdbg("draw: pid=%d anchor_out=%d acol=%d off=%d span=%d\n",
+                   (int)getpid(), ed_anchor, ed_anchor_col, ed_off, ed_span);
+
+        /* Absolute draw start: pane-local CUP to the anchor. The physical
+         * cursor may be anywhere — probe miss, an animation frame that
+         * wrapped, a plain-path excursion — anchoring by coordinates makes
+         * every draw self-heal instead of drifting row by row. */
+        outf("\033[%d;%dH", ed_anchor + 1, ed_anchor_col + 1);
+
+        /* Draw: the new content overwrites every row it covers — no
+         * pre-erase pass (blanking first flashed on every keystroke). */
+        if (prompt) out(prompt);
+        bdump(&e, 0, e.cur);
+        bdump(&e, e.cur, e.len);
+        if (gh.len) {
+            if (Cfg.col_guess) {
+                char sgb[24] = "";
+                color_sgr(Cfg.col_guess, Cfg.op_guess, sgb, sizeof sgb);
+                char wrap[32] = "";
+                if (sgb[0]) snprintf(wrap, sizeof wrap, "\033[%sm", sgb);
+                out(wrap);
+                bdump(&gh, 0, gh.len);
+                out("\033[0m");
+            } else {
+                out("\033[2m");
+                bdump(&gh, 0, gh.len);
+                out("\033[22m");
+            }
+        }
+        out("\033[K");
+
+        int last = tcells > 0 ? tcells - 1 : 0;
+        int end_row = ed_row_of(last);
+        int new_span = end_row + 1;
+
+        /* the draw may have scrolled the pane (wrapped past the last
+         * row): shift the anchor by exactly how much we drew over */
+        int over = (ed_anchor + new_span - 1) - (rows - 1);
+        if (over > 0) ed_anchor -= over;
+
+        /* clear rows only when the line got SHORTER (leftovers below) —
+         * absolute erase, no \n chains to go wrong */
+        for (int rr = new_span; rr < old_span; rr++) {
+            if (ed_anchor + rr > rows - 1) break;
+            outf("\033[%d;1H\033[K", ed_anchor + rr + 1);
+        }
+
+        /* park the cursor on its cell — absolute pane-local CUP */
+        int cur_row = ed_row_of(cur_cell);
+        int cur_col = ed_col_of(cur_cell);
+        outf("\033[%d;%dH", ed_anchor + cur_row + 1, cur_col + 1);
+        if (muxdbg_on())
+            muxdbg("draw: pid=%d cur_row=%d cur_col=%d expect_park=(%d,%d)\n",
+                   (int)getpid(), cur_row, cur_col,
+                   ed_anchor + cur_row, cur_col);
+
+        ed_off = cur_row;
+        ed_span = new_span;
+        ed_drew = 1;
+        return;
+    }
+
+    /* plain terminal (or mux not ready): the historical single-row draw */
+    if (muxdbg_on()) muxdbg("draw: PLAIN path have=%d\n", have);
     out("\r");
     if (prompt) out(prompt);
     bdump(&e, 0, e.cur);
@@ -553,11 +913,50 @@ static void ed_draw(void)
     out("\033[K");
     int back = bcells(&e, e.cur, e.len) + bcells(&gh, 0, gh.len);
     if (back > 0) outf("\033[%dD", back);
+    /* a probe/plain excursion left the physical cursor mid-line: drop the
+     * anchor so the next mux draw re-derives it from fresh geometry */
+    if (ed_drew) ed_anchor = -1;
+    ed_drew = 1;
+}
+
+/* Resize / resume: repaint the line at once instead of waiting for the
+ * next keystroke (the caret used to sit at stale coordinates until then).
+ * The anchor re-fit itself happens inside ed_draw's geometry check. */
+static void ed_check_resize(void)
+{
+    thesh_on_cont();
+    if (!thesh_winched) return;
+    thesh_winched = 0;
+    if (mux_active()) mux_pump();          /* router: relayout on winch  */
+    if (!mux_active())                      /* pane shells / plain draw   */
+        ed_draw();
+}
+
+/* Leave the input line: park at the end of its span first (absolute),
+ * so Enter's newline lands below the whole wrapped line, then drop the
+ * anchor. */
+static void ed_leave_line(void)
+{
+    if (ed_anchor >= 0)
+        outf("\033[%d;1H", ed_anchor + ed_span);
+    ed_anchor = -1;
+    ed_off = 0;
+    ed_span = 1;
+    ed_drew = 0;
 }
 
 static void rsearch_draw(void)
 {
     const char *m = rmatch >= 0 ? H.items[rmatch] : "(no match)";
+    if (ed_anchor >= 0) {
+        /* status one row below the input line, then back to the cursor —
+         * both by absolute pane-local CUP (no relative chain) */
+        int cur_cell = prompt_cells() + bcells(&e, 0, e.cur);
+        outf("\033[%d;1H\033[K", ed_anchor + ed_span + 1);
+        outf("(reverse-i-search)`%.*s': %s", rqlen, rq, m);
+        outf("\033[%d;%dH", ed_anchor + ed_off + 1, ed_col_of(cur_cell) + 1);
+        return;
+    }
     out("\n\033[K");
     outf("(reverse-i-search)`%.*s': %s", rqlen, rq, m);
 }
@@ -565,6 +964,7 @@ static void rsearch_draw(void)
 static void clear_screen(void)
 {
     out("\033[H\033[2J");
+    ed_anchor = -1;                     /* next draw re-scans the cursor */
 }
 
 /* ── Typed-character animations ──────────────────────────────────────
@@ -602,7 +1002,10 @@ static void anim_draw(int idx, int offs, uint32_t glyph)
     int gw = gl ? cp_width(glyph) : 0;
     int printed;                                /* cells after the prefix */
 
-    out("\r");
+    /* absolute start: on the anchor row (mux), col 0 of the current row
+     * otherwise — never inherit a cursor position from a prior frame */
+    if (ed_anchor >= 0) outf("\033[%d;1H", ed_anchor + 1);
+    else out("\r");
     if (prompt) out(prompt);
     bdump(&e, 0, idx);
 
@@ -649,6 +1052,12 @@ static void ed_animate(int idx)
 {
     if (Cfg.animation == ANIM_NONE) return;
     if (!term_raw_active())       return;
+    if (ed_anchor >= 0 && (ed_anchor_col > 0 || ed_span > 1 ||
+        prompt_cells() + bcells(&e, 0, e.len) + bcells(&gh, 0, gh.len) + ANIM_FRAMES + 2
+            > ed_w - ed_anchor_col))
+        return;         /* wrapped / mid-row / ghost-overflow line: the
+                         * frame would wrap the pane and desync the row —
+                         * fall back to the plain (absolute) redraw       */
 
     uint32_t real = e.v[idx];
     compute_suggest();            /* fresh ghost behind the frames */
@@ -752,6 +1161,7 @@ static void tab_complete(void)
             bset_str(&e, nl);
         } else {
             /* list the matches; the next keystroke redraws the line */
+            ed_leave_line();
             out("\r\n");
             for (int i = 0; i < c.n; i++) outf("%s%s", i ? "  " : "", c.v[i]);
             out("\r\n");
@@ -837,12 +1247,14 @@ static int bind_run(const Bind *b)
 {
     switch (b->kind) {
     case BIND_CLOSE:
+        ed_leave_line();
         out("\r\n");
         return 1;
     case BIND_COPY: {
         char *t = btext(&e);
         clip_set(t);
         free(t);
+        ed_leave_line();
         out("\r\n");
         outf("%s: copied\r\n", THESH_NAME);
         return 0;
@@ -853,6 +1265,7 @@ static int bind_run(const Bind *b)
     case BIND_EXEC: {
         char cmd[BIND_CMD_MAX * 2 + 8];
         if (b->ask[0]) {
+            ed_leave_line();
             out("\r\n");                          /* leave the typing line */
             char pbuf[BIND_ASK_MAX + 4];
             snprintf(pbuf, sizeof pbuf, "%s : ", b->ask);
@@ -864,10 +1277,16 @@ static int bind_run(const Bind *b)
             return 0;
         }
         snprintf(cmd, sizeof cmd, "%s", b->cmd);
+        ed_leave_line();
         out("\r\n");
         exec_line(cmd);
         return 0;
     }
+    case BIND_VERB:                            /* pane verbs are builtins */
+        ed_leave_line();
+        out("\r\n");
+        exec_line(b->cmd);
+        return 0;
     }
     return 0;
 }
@@ -901,6 +1320,67 @@ static int arrow_step(int key)
     return base;
 }
 
+/* Returns 0 = no bind matched, 1 = a bind ran, 2 = bind wants EOF. */
+static int try_bind(int key, uint32_t cp, int mods)
+{
+    /* Shared bytes (Enter/Ctrl+M/Ctrl+J, Backspace/Ctrl+H) only consult
+     * binds on an empty line — with text the real action always wins. */
+    int shared_byte = (key == K_NONE &&
+                       (cp == 0x0d || cp == 0x0a || cp == 0x08));
+    if (shared_byte && e.len > 0) return 0;
+
+    int bkey = key;                         /* named keys pass through */
+    if (key == K_NONE) {
+        if (cp > 0 && cp < 0x1b) bkey = (int)cp + 0x60;   /* ctrl letter */
+        else bkey = (int)cp;                                /* plain char */
+    }
+    const Bind *bd = bind_lookup(mods, bkey);
+    if (!bd) return 0;
+    return bind_run(bd) ? 2 : 1;
+}
+
+/* Map a decoded key to a configured bind (shared with the router: it
+ * uses the same rc binds, minus the line-dependent shared-byte rule). */
+const Bind *ed_bind_lookup(int key, uint32_t cp, int mods)
+{
+    int bkey = key;                         /* named keys pass through */
+    if (key == K_NONE) {
+        if (cp > 0 && cp < 0x1b) bkey = (int)cp + 0x60;   /* ctrl letter */
+        else bkey = (int)cp;                                /* plain char */
+    }
+    return bind_lookup(mods, bkey);
+}
+
+/* A forked pane shell drops coordinates from the pre-fork screen: the
+ * next draw re-derives its anchor from the pane's own cursor probe. */
+void ed_reset_anchor(void)
+{
+    ed_anchor = -1;
+    ed_off = 0;
+    ed_span = 1;
+    ed_drew = 0;
+}
+
+/* Ctrl+arrow → pane direction while multiplexed; -1 = not a nav key.
+ * Without the mux these stay word-jumps, so nothing changes for
+ * single-pane users. */
+static int mux_nav(int key, int mods)
+{
+    if (!mux_active() || !(mods & MOD_CTRL)) return -1;
+    switch (key) {
+    case K_LEFT:  case K_WLEFT:  return 0;
+    case K_RIGHT: case K_WRIGHT: return 1;
+    case K_UP:                    return 2;
+    case K_DOWN:                  return 3;
+    default:                      return -1;
+    }
+}
+
+int ed_mux_nav(int key, int mods)      /* public: the router loop       */
+{
+    return mux_nav(key, mods);
+}
+
 /* ── The main line editor ─────────────────────────────────────────── */
 char *edit_line(const char *prompt_txt, int *cancelled)
 {
@@ -917,6 +1397,10 @@ char *edit_line(const char *prompt_txt, int *cancelled)
     prompt = prompt_txt;
     binit(&e);
     binit(&gh);
+    ed_anchor = -1;                     /* fresh line: anchor = cursor    */
+    ed_off = 0;
+    ed_span = 1;
+    ed_drew = 0;
     hist_reset();
     rqlen = 0;
     rmatch = -1;
@@ -926,6 +1410,7 @@ char *edit_line(const char *prompt_txt, int *cancelled)
                                                   is always base speed      */
 
     for (;;) {
+        /* every loop draws the line before blocking on a key */
         compute_suggest();
         ed_draw();
         if (rsearch_on) rsearch_draw();
@@ -933,28 +1418,15 @@ char *edit_line(const char *prompt_txt, int *cancelled)
         uint32_t cp = 0;
         int mods = 0;
         int key = ed_read_key(&cp, &mods);
+
+        if (key == K_EOF) { eof = 1; goto done; }
+
         int control = (key == K_NONE && cp < 0x20);
 
-        /* User bindings intercept before the default key actions.
-         * Shared bytes: 0x0d/0x0a are Enter (Ctrl+M/Ctrl+J) and 0x08 is
-         * Backspace (Ctrl+H) — no terminal can tell the combos apart
-         * from the plain key. The real action must keep working while
-         * there is text on the line, so binds for these bytes fire ONLY
-         * on an empty line, where Enter/Backspace do nothing anyway. */
-        int shared_byte = (key == K_NONE &&
-                           (cp == 0x0d || cp == 0x0a || cp == 0x08));
-        if (!shared_byte || e.len == 0) {
-            int bkey = key;                     /* named keys pass through */
-            if (key == K_NONE) {
-                if (cp > 0 && cp < 0x1b) bkey = (int)cp + 0x60;   /* ctrl letter */
-                else bkey = (int)cp;                                /* plain char */
-            }
-            const Bind *bd = bind_lookup(mods, bkey);
-            if (bd) {
-                if (bind_run(bd)) { eof = 1; goto done; }
-                continue;
-            }
-        }
+        /* user bindings intercept before the default key actions */
+        int tb = try_bind(key, cp, mods);
+        if (tb == 2) { eof = 1; goto done; }
+        if (tb == 1) continue;
 
         /* map plain control keys */
         if (key == K_NONE && control) {
@@ -986,23 +1458,27 @@ char *edit_line(const char *prompt_txt, int *cancelled)
                 rsearch_on = 0;
                 break;                       /* keep edited line */
             }
+            ed_leave_line();
             out("\r\n");
             goto done;
 
         case K_CTL_C:
             if (rsearch_on) { rsearch_on = 0; break; }
             bclr(&e);
+            ed_leave_line();
             out("\r\n");
             *cancelled = 1;
             goto done;
 
         case K_EOF:
+            ed_leave_line();
             out("\r\n");
             eof = 1;
             goto done;
 
         case K_CTL_D:
             if (e.len == 0 && e.cur == 0) {
+                ed_leave_line();
                 out("\r\n");
                 eof = 1;
                 goto done;                   /* EOF */
@@ -1101,8 +1577,12 @@ char *edit_line(const char *prompt_txt, int *cancelled)
             if (!rsearch_on) tab_complete();
             goto edited;
 
-        case K_PGUP: e.cur = 0; break;
-        case K_PGDN: e.cur = e.len; break;
+        case K_PGUP:
+            e.cur = 0;
+            break;
+        case K_PGDN:
+            e.cur = e.len;
+            break;
 
         default:
             if (key == K_NONE && !control) {
