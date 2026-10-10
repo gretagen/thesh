@@ -146,6 +146,9 @@ multiplexer-inactive-color = 'default'
 #   bind = ALT + H = split-window-horizontal 50
 # moving focus: Ctrl+arrows work out of the box, or bind the arrows:
 #   bind = ALT + R-ARROW = move-to-right-window   (L-/U-/D-ARROW too)
+# console-safe nav (Linux VT keymaps strip modifiers from arrow keys):
+#   bind = CTRL + P = focus-prev
+#   bind = CTRL + N = focus-next
 # window management:
 #   bind = CTRL + Q = kill-curent-window   (kill-current-window too)
 #   bind = CTRL + K = kill-all-windows

@@ -168,6 +168,13 @@ static int parse_seq(const char *s, int n, uint32_t *cp, int *mods)
 {
     if (n == 1) { *cp = 27; return K_NONE; }                      /* bare ESC */
 
+    /* meta-prefixed CSI (ESC ESC [ x): what consoles and
+     * metaSendsEscape-style terminals send for Alt+arrows */
+    if (n >= 3 && s[0] == 27 && s[1] == 27 && (s[2] == '[' || s[2] == 'O')) {
+        *mods |= MOD_ALT;
+        return parse_seq(s + 1, n - 1, cp, mods);
+    }
+
     if (n == 2 && s[0] == 27) {                                   /* Alt+X */
         if (s[1] == 'b') { *mods |= MOD_ALT; return K_WLEFT; }
         if (s[1] == 'f') { *mods |= MOD_ALT; return K_WRIGHT; }
@@ -309,7 +316,17 @@ static int seq_complete(const char *s, int n)
         return 0;
     }
     if (s[1] == 'O') return n >= 3;
-    if (s[1] == 27)  return 0;             /* ESC ESC … — keep reading */
+    if (s[1] == 27) {                      /* ESC ESC … (meta prefix)  */
+        if (n >= 3 && s[2] == '[') {       /* ESC ESC [ x — like CSI    */
+            for (int i = 3; i < n; i++) {
+                unsigned char c = (unsigned char)s[i];
+                if (c >= 0x40 && c <= 0x7e) return 1;
+            }
+            return 0;
+        }
+        if (n >= 3 && s[2] == 'O') return n >= 4;
+        return 0;                          /* keep reading             */
+    }
     return 1;                              /* Alt+X at 2 bytes         */
 }
 

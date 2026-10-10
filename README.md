@@ -4,7 +4,7 @@ A lightweight, standalone POSIX shell for Haliade OS, written in C11/C23. No bas
 dependency — works with any system providing a C compiler and POSIX libc. Tiny
 single binary; no external libraries.
 
-Current version: **0.5.0**
+Current version: **0.5.1**
 
 ## Building
 
@@ -57,6 +57,7 @@ cp theshrc.sample ~/.theshrc
 - **Levenshtein typo detection** — misspelled commands trigger a "Did you mean …?" suggestion or auto-correct
 - **Smart command casing** — `hybrid` typing (default) folds command names (`LS`, `PACMAN -S` work); `lowercase` is case-sensitive; arguments always stay as typed
 - **Full tokenizer** — single/double quotes, backslash escapes, `$VAR`, `${VAR}`, `$?`, `~` expansion
+- **Globbing** — `*`, `?`, `[...]` expand to sorted matches (dotfiles hidden unless the pattern starts with `.`); no match passes the word through literally, and quoted/escaped words (`grep 'foo*'`) are never expanded
 - **Aliases** — `alias name=val` with multi-word values; stored in-process, not exported
 - **Pipelines** — `cmd1 | cmd2 | cmd3`, each stage in its own process, exit status from the last command
 - **RC files** — `/etc/theshrc`, then `~/.theshrc`, then `~/.therc` (legacy fallback only)
@@ -111,7 +112,7 @@ When `looks` isn't set, `$PS1` is expanded. Supported escapes:
 | `\u`   | user                             | `\w`   | cwd (`~` collapsed) |
 | `\h`   | hostname (short)                 | `\W`   | basename of cwd |
 | `\H`   | hostname (long)                  | `\$`   | `#` if root, else `$` |
-| `\s`   | shell name (`thesh`)             | `\v`   | version (`0.5.0`) |
+| `\s`   | shell name (`thesh`)             | `\v`   | version (`0.5.1`) |
 | `\t`   | time `HH:MM:SS`                  | `\A`   | time `HH:MM`    |
 | `\@`   | time `HH:MM AM/PM`               | `\d`   | date `Day Mon DD` |
 | `\n`   | newline                          | `\e`   | escape          |
@@ -309,6 +310,12 @@ bind = ALT + D-ARROW = move-to-down-window
   bind arrows as above — `L-ARROW`/`R-ARROW`/`U-ARROW`/`D-ARROW` are key
   names). With a single pane nothing changes: Ctrl+arrows keep
   word-jumping there, and Alt+arrows word-jump everywhere.
+  **On a Linux console (VT)** the keymap strips the modifiers off arrow
+  keys and captures Alt+Left/Right for VT switching — arrows simply
+  can't carry chords there. Bind letter chords instead, they always
+  arrive: `bind = CTRL + P = focus-prev` / `bind = CTRL + N = focus-next`.
+  (A console has no mouse reporting either — pane clicking works in
+  terminal emulators only.)
 * **Settings:** `multiplexer = 'no'` disables splitting (and tears down
   an active mux live), `multiplexer-window-limit = 'inf'|N` caps the
   pane count, `multiplexer-style = 'crosshair'` is the separator look.

@@ -1,4 +1,5 @@
 #include "thesh.h"
+#include <glob.h>
 
 extern char **environ;
 
@@ -82,7 +83,9 @@ int is_builtin(const char *name)
 }
 
 /* ── Tokenizer ────────────────────────────────────────────────────── */
-typedef struct { char *b; size_t len, cap; } Word;
+/* `quoted` marks a word that had any character pass through a quote or
+ * backslash — such words are never globbed (grep 'foo*' stays literal). */
+typedef struct { char *b; size_t len, cap; unsigned char quoted; } Word;
 
 static void wadd(Word *w, char c)
 {
@@ -129,6 +132,38 @@ static const char *expand_var(Word *w, const char *p)
     return p;
 }
 
+/* ── Globbing ─────────────────────────────────────────────────────── */
+static int glob_has_meta(const char *s)
+{
+    for (; *s; s++)
+        if (*s == '*' || *s == '?' || *s == '[') return 1;
+    return 0;
+}
+
+/* Expand one word containing glob metacharacters.  glob(3) returns the
+ * matches sorted; with no match the word stays literal (bash-style:
+ * `ls *.zzz` on a non-matching directory just reports "no such file").
+ * Matches are strdup'd into argv so the existing free_argv stays
+ * balanced; a bad pattern simply keeps its literal form. */
+static void glob_splice(const char *pat, char ***args, int *n, int *cap)
+{
+    glob_t g;
+    memset(&g, 0, sizeof g);
+    int r = glob(pat, 0, NULL, &g);
+    if (r == 0 && g.gl_pathc > 0) {
+        for (size_t i = 0; i < g.gl_pathc; i++) {
+            if (*n >= *cap) { *cap = *cap ? *cap * 2 : 8;
+                *args = xrealloc(*args, sizeof(char *) * (size_t)*cap); }
+            (*args)[(*n)++] = xstrdup(g.gl_pathv[i]);
+        }
+    } else {
+        if (*n >= *cap) { *cap = *cap ? *cap * 2 : 8;
+            *args = xrealloc(*args, sizeof(char *) * (size_t)*cap); }
+        (*args)[(*n)++] = xstrdup(pat);
+    }
+    globfree(&g);
+}
+
 static char **tokenize(const char *line, int *argc)
 {
     *argc = 0;
@@ -140,17 +175,23 @@ static char **tokenize(const char *line, int *argc)
 
 #define FLUSH() do {                                                       \
         if (started) {                                                     \
-            if (n >= cap) { cap = cap ? cap * 2 : 8;                       \
-                args = xrealloc(args, sizeof(char *) * (size_t)cap); }     \
             /* terminate at w.len: an empty word ("", '', or a $VAR that   \
              * expands to nothing) appended no chars, so w.b still holds   \
              * the PREVIOUS token — strdup'ing it as-is turned `""` into   \
              * a duplicate of the last argument. NULL-guard a first token  \
              * that never allocated. */                                    \
             if (w.b) w.b[w.len] = 0;                                       \
-            args[n++] = xstrdup(w.b ? w.b : "");                           \
+            /* glob unquoted words carrying * ? [ (quoted/escaped words   \
+             * are literal; no match keeps the word literal too) */        \
+            if (w.b && !w.quoted && glob_has_meta(w.b))                    \
+                glob_splice(w.b, &args, &n, &cap);                         \
+            else {                                                         \
+                if (n >= cap) { cap = cap ? cap * 2 : 8;                   \
+                    args = xrealloc(args, sizeof(char *) * (size_t)cap); } \
+                args[n++] = xstrdup(w.b ? w.b : "");                       \
+            }                                                              \
         }                                                                  \
-        w.len = 0; started = 0;                                            \
+        w.len = 0; started = 0; w.quoted = 0;                              \
     } while (0)
 
     while (*p) {
@@ -158,12 +199,14 @@ static char **tokenize(const char *line, int *argc)
         if (*p == '#' && !started) break;  /* comment to end of line */
         started = 1;
         if (*p == '\'') {
+            w.quoted = 1;
             p++;
             while (*p && *p != '\'') wadd(&w, *p++);
             if (*p) p++;
             continue;
         }
         if (*p == '"') {
+            w.quoted = 1;
             p++;
             while (*p && *p != '"') {
                 if (*p == '\\' && p[1] &&
@@ -178,7 +221,7 @@ static char **tokenize(const char *line, int *argc)
             if (*p) p++;
             continue;
         }
-        if (*p == '\\' && p[1]) { p++; wadd(&w, *p++); continue; }
+        if (*p == '\\' && p[1]) { w.quoted = 1; p++; wadd(&w, *p++); continue; }
         if (*p == '$') { p = expand_var(&w, p); continue; }
         if (*p == '~' && w.len == 0) {
             const char *h = getenv("HOME");
