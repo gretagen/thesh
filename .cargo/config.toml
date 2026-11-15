@@ -1,0 +1,6 @@
+# Toolchain workaround for this machine: the system rustc defaults to the
+# linker name `x86_64-linux-gnu-gcc`, but distro gcc only ships the
+# `x86_64-pc-linux-gnu-gcc` name (and there is no plain `cc`). Pin the
+# real compiler so `cargo build` works. Remove if the system rustc is fixed.
+[target.x86_64-unknown-linux-gnu]
+linker = "gcc"

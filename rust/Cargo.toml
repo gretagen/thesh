@@ -1,0 +1,19 @@
+[package]
+name = "thesh"
+version = "0.5.1"
+edition = "2021"
+description = "A lightweight, standalone POSIX shell — Rust port of the C original"
+license = "MIT"
+
+# Minimal curated deps: libc for the POSIX surface (termios, wcwidth,
+# write, getpwuid, access). nix/signal-hook join in M4/M5 (forkpty, signals).
+[dependencies]
+libc = "0.2"
+
+[lib]
+name = "thesh"
+path = "src/lib.rs"
+
+[[bin]]
+name = "thesh"
+path = "src/main.rs"

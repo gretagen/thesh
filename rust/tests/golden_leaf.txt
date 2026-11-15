@@ -1,0 +1,114 @@
+enc 00000000 -> 00 1
+enc 00000041 -> 41 1
+enc 0000007f -> 7f 1
+enc 00000080 -> c280 2
+enc 000007ff -> dfbf 2
+enc 00000800 -> e0a080 3
+enc 0000d7ff -> ed9fbf 3
+enc 0000e000 -> ee8080 3
+enc 0000ffff -> efbfbf 3
+enc 00010000 -> f0908080 4
+enc 0010ffff -> f48fbfbf 4
+enc 001fffff -> f7bfbfbf 4
+enc ffffffff -> ffbfbfbf 4
+dec 4100000000000000 -> 00000041 1 1
+dec c3a9000000000000 -> 000000e9 2 1
+dec e4b8ad0000000000 -> 00004e2d 3 1
+dec f09f988000000000 -> 0001f600 4 1
+dec c080000000000000 -> 00000000 2 1
+dec 8000000000000000 -> 00000080 1 0
+dec e4412e0000000000 -> 000000e4 1 0
+dec e4b8000000000000 -> 000000e4 1 0
+dec f800000000000000 -> 000000f8 1 0
+dec ff00000000000000 -> 000000ff 1 0
+dec f580808000000000 -> 00140000 4 1
+dec c200000000000000 -> 000000c2 1 0
+dec eda0800000000000 -> 0000d800 3 1
+dec e080800000000000 -> 00000000 3 1
+dec 7f00000000000000 -> 0000007f 1 1
+dec 0000000000000000 -> 00000000 1 1
+dist "kitten" "sitting" -> 3
+dist "" "abc" -> 3
+dist "abc" "" -> 3
+dist "same" "same" -> 0
+dist "a" "b" -> 1
+dist "ab" "ba" -> 2
+dist "café" "cafe" -> 2
+dist "ab" "abcd" -> 2
+dist "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" -> 256
+dist "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "" -> 999
+sugg "ecoh" -> "echo"
+sugg "echo" -> none
+sugg "" -> none
+sugg "xyzabc" -> none
+sugg "tyep" -> "type"
+sugg "cdx" -> "cd"
+sugg "lst" -> none
+sugg "pxwd" -> "pwd"
+sugg "echotset" -> none
+width 00000000 -> 0
+width 00000009 -> 1
+width 00000020 -> 1
+width 00000041 -> 1
+width 0000007e -> 1
+width 0000007f -> 1
+width 00004e2d -> 1
+width 0001f600 -> 1
+width 00002500 -> 1
+width 000000a0 -> 1
+sgr "31" 100 -> 3331
+sgr "31" 65 -> 33383b353b3838
+sgr "31" 0 -> 33383b353b3136
+sgr "31" -1 -> 3331
+sgr "39" 100 -> 3339
+sgr "39" 65 -> 
+sgr "39" 0 -> 
+sgr "39" -1 -> 3339
+sgr "34" 100 -> 3334
+sgr "34" 65 -> 33383b353b3234
+sgr "34" 0 -> 33383b353b3136
+sgr "34" -1 -> 3334
+sgr "" 100 -> 
+sgr "" 65 -> 
+sgr "" 0 -> 
+sgr "" -1 -> 
+sgr "38;5;77" 100 -> 33383b353b3737
+sgr "38;5;77" 65 -> 33383b353b3737
+sgr "38;5;77" 0 -> 33383b353b3737
+sgr "38;5;77" -1 -> 33383b353b3737
+sgr "90" 100 -> 3930
+sgr "90" 65 -> 33383b353b3539
+sgr "90" 0 -> 33383b353b3136
+sgr "90" -1 -> 3930
+sgr "41" 100 -> 3431
+sgr "41" 65 -> 3431
+sgr "41" 0 -> 3431
+sgr "41" -1 -> 3431
+looks default "$RIGHTWALL|$USER|$HOSTNAME|$PATH|$CURSOR$SPACER$" -> 5b7c626f627c686f73747c2f746d707c242024
+looks colored "lit $PATH $UNKNOWN_TOK tail $CURSOR" -> 1b5b33346d6c69741b5b33383b353b35326d2f746d701b5b33346d24554e4b4e4f574e5f544f4b207461696c1b5b33346d251b5b306d
+looks spacers "a  $SPACER  b" -> 1b5b33346d61201b5b33346d2020621b5b306d
+ps1 "\u@\h:\w \W \s \v \j \! \\ \e[0m \[x\] tail" -> 626f6240686f73743a2f686f6d652f626f622f70726f6a2070726f6a20746865736820302e352e3120302031205c201b5b306d2078207461696c
+ps1 root-basename -> 
+cfgdump-begin
+# thesh preset
+layout = 'x $CURSOR'
+rightwallstyle = '['
+leftwallstyle = ']'
+seperatorstyle = '|'
+cursorstyle = '$'
+hostname-color = 'white'
+user-opacity = '55%'
+typing = 'lowercase'
+guesser = 'no'
+corrector = 'consent'
+autoreload = 'yes'
+history = 'yes'
+historylimit = '0'
+animation = 'none'
+movespeed = '7'
+scrollspeed = '1'
+amplify = '2'
+multiplexer = 'yes'
+multiplexer-window-limit = '9'
+multiplexer-style = 'crosshair'
+cfgdump-end

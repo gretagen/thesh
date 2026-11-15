@@ -1,59 +1,30 @@
-CC     ?= cc
-CSTD   ?= c23
-LDFLAGS ?=
-LDFLAGS += -lutil                 # forkpty() for the native multiplexer
+CARGO ?= cargo
 
-GNUMAKEFLAGS += -j$(shell nproc 2>/dev/null || echo 1)
-
-WARN_FLAGS := -Wall -Wextra -Wpedantic -Wshadow -Wconversion \
-              -Wformat=2 -Wundef
-
-DEBUG_CFLAGS   := $(WARN_FLAGS) -g3 -O0 -fsanitize=address,undefined
-RELEASE_CFLAGS := $(WARN_FLAGS) -g0 -O3 -flto
-DEBUG_LDFLAGS  := -fsanitize=address,undefined
-RELEASE_LDFLAGS := -flto
-
-NAME       := thesh
-OUTDIR     := build
-
-all: debug
-
-debug:   $(OUTDIR)/debug/$(NAME)
-release: $(OUTDIR)/release/$(NAME)
-
-# `make install` destination: PREFIX defaults to ~/.local (user-local).
-# DESTDIR is a staging prefix, empty by default; for the Haliade rootfs use
-#   make install PREFIX=/usr DESTDIR=$(HOME)/haliade-root
 DESTDIR ?=
 PREFIX  ?= $(HOME)/.local
 
-SRC := $(sort $(wildcard src/*.c))
+all: debug
 
-DEBUG_OBJS   := $(patsubst src/%.c,$(OUTDIR)/debug/obj/%.o,$(SRC))
-RELEASE_OBJS := $(patsubst src/%.c,$(OUTDIR)/release/obj/%.o,$(SRC))
+debug:
+	$(CARGO) build --manifest-path rust/Cargo.toml
 
-$(OUTDIR)/debug/obj/%.o: src/%.c src/thesh.h | $(OUTDIR)/debug/obj
-	$(CC) -std=$(CSTD) $(DEBUG_CFLAGS) -c -o $@ $<
+release:
+	$(CARGO) build --release --manifest-path rust/Cargo.toml
 
-$(OUTDIR)/release/obj/%.o: src/%.c src/thesh.h | $(OUTDIR)/release/obj
-	$(CC) -std=$(CSTD) $(RELEASE_CFLAGS) -c -o $@ $<
+# Unit + integration suites (golden vectors, interactive pty sessions).
+test:
+	$(CARGO) test --manifest-path rust/Cargo.toml
 
-$(OUTDIR)/debug/$(NAME): $(DEBUG_OBJS) | $(OUTDIR)/debug
-	$(CC) $(DEBUG_CFLAGS) -o $@ $(DEBUG_OBJS) $(LDFLAGS) $(DEBUG_LDFLAGS)
-
-$(OUTDIR)/release/$(NAME): $(RELEASE_OBJS) | $(OUTDIR)/release
-	$(CC) $(RELEASE_CFLAGS) -o $@ $(RELEASE_OBJS) $(LDFLAGS) $(RELEASE_LDFLAGS)
-
-$(OUTDIR)/debug/obj $(OUTDIR)/release/obj \
-$(OUTDIR)/debug $(OUTDIR)/release:
-	mkdir -p $@
+# Same, with per-case output for the parity/interactive runners.
+test-verbose:
+	$(CARGO) test --manifest-path rust/Cargo.toml -- --nocapture
 
 install: release
-	install -Dm755 $(OUTDIR)/release/$(NAME) $(DESTDIR)$(PREFIX)/bin/$(NAME)
-	@echo "installed $(NAME) -> $(DESTDIR)$(PREFIX)/bin/$(NAME)"
+	install -Dm755 rust/target/release/thesh $(DESTDIR)$(PREFIX)/bin/thesh
+	@echo "installed thesh -> $(DESTDIR)$(PREFIX)/bin/thesh"
 	@echo "config: cp theshrc.sample ~/.theshrc   (system-wide: /etc/theshrc)"
 
 clean:
-	rm -rf $(OUTDIR)
+	$(CARGO) clean --manifest-path rust/Cargo.toml
 
-.PHONY: all debug release clean install
+.PHONY: all debug release test test-verbose install clean

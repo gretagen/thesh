@@ -1,4 +1,2 @@
-build/
 haliade-root/
-src/*.o
-/thesh
+rust/target/

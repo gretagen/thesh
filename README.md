@@ -1,33 +1,51 @@
 # thesh
 
-A lightweight, standalone POSIX shell for Haliade OS, written in C11/C23. No bash
-dependency — works with any system providing a C compiler and POSIX libc. Tiny
-single binary; no external libraries.
+A lightweight, standalone POSIX shell for Haliade OS, written in Rust. No
+bash dependency — works with any system providing a POSIX libc. Tiny
+single binary; the only crate dependency is `libc`.
 
 Current version: **0.5.1**
 
 ## Building
 
 ```sh
-make              # debug build (default): -g3 -O0 + Address/Undefined sanitizers
-make release      # optimized: -g0 -O3 + LTO
+make              # debug build (default)
+make release      # optimized build (release profile + LTO)
 make clean
-make -j           # parallel is enabled by default (nproc)
 ```
 
-Compiles warning-clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion
--Wformat=2 -Wundef`. Override the compiler or standard if needed:
-
-```sh
-make CC=clang CSTD=c11
-```
+Both wrap `cargo` directly (`cargo build --manifest-path rust/Cargo.toml`),
+so plain cargo commands work too.
 
 Binaries:
 
-| Build    | Path                     |
-|----------|--------------------------|
-| debug    | `build/debug/thesh`      |
-| release  | `build/release/thesh`    |
+| Build    | Path                          |
+|----------|-------------------------------|
+| debug    | `rust/target/debug/thesh`     |
+| release  | `rust/target/release/thesh`   |
+
+## Testing
+
+```sh
+make test           # unit suites + golden vectors + interactive pty sessions
+make test-verbose   # same, with per-case output
+```
+
+Three layers keep the port honest:
+
+- **Unit tests** (~112) inside the modules: tokenizer, editor input
+  layer, exec builtins/redirections, config parsing, mux tree/layout,
+  the terminal emulator, bind/preset parsers, history/dict/spell…
+- **Golden vectors** (`rust/tests/golden.rs`): pure functions — UTF-8,
+  edit distance, suggestions, SGR/opacity blending, `looks`/`$PS1`
+  rendering, config dump round-trip — asserted against a checked-in
+  vector file generated from the C original before its sources were
+  retired.
+- **Interactive pty sessions** (`rust/tests/interactive.rs`): the shell
+  is driven over a real 80×24 pty with scripted keystrokes (editing,
+  history motion, completion, ghosts) and the multiplexer cycle
+  (split → kill-all → leave → fresh shell), asserting on the raw
+  terminal byte stream.
 
 ## Installation
 
@@ -520,10 +538,10 @@ the exact prompt, aliases and bindings.
 ## Run modes
 
 ```sh
-build/release/thesh            # interactive REPL
-thesh -c 'ls -la'              # execute a single command
-thesh script.sh                # run a file non-interactively
-echo 'ls' | thesh              # read from stdin (no prompt)
+rust/target/release/thesh     # interactive REPL (or: make install)
+thesh -c 'ls -la'             # execute a single command
+thesh script.sh               # run a file non-interactively
+echo 'ls' | thesh             # read from stdin (no prompt)
 ```
 
 ## History
