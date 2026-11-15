@@ -1,6 +1,6 @@
 [package]
 name = "thesh"
-version = "0.5.1"
+version = "1.0.0"
 edition = "2021"
 description = "A lightweight, standalone POSIX shell — Rust port of the C original"
 license = "MIT"

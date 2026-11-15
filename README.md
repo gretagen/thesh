@@ -4,7 +4,7 @@ A lightweight, standalone POSIX shell for Haliade OS, written in Rust. No
 bash dependency — works with any system providing a POSIX libc. Tiny
 single binary; the only crate dependency is `libc`.
 
-Current version: **0.5.1**
+Current version: **1.0.0**
 
 ## Building
 
@@ -130,7 +130,7 @@ When `looks` isn't set, `$PS1` is expanded. Supported escapes:
 | `\u`   | user                             | `\w`   | cwd (`~` collapsed) |
 | `\h`   | hostname (short)                 | `\W`   | basename of cwd |
 | `\H`   | hostname (long)                  | `\$`   | `#` if root, else `$` |
-| `\s`   | shell name (`thesh`)             | `\v`   | version (`0.5.1`) |
+| `\s`   | shell name (`thesh`)             | `\v`   | version (`1.0.0`) |
 | `\t`   | time `HH:MM:SS`                  | `\A`   | time `HH:MM`    |
 | `\@`   | time `HH:MM AM/PM`               | `\d`   | date `Day Mon DD` |
 | `\n`   | newline                          | `\e`   | escape          |
