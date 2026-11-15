@@ -1,3 +1,5 @@
+(Thesh has been transpiled from C to be Rust to have better memory management, I cannot write Rust that good, so expect occasional AI assistance, or slower development. Thesh will probably also be transpilled to V, as it js easier, and more maintable.)
+
 # thesh
 
 A lightweight, standalone POSIX shell for Haliade OS, written in Rust. No
